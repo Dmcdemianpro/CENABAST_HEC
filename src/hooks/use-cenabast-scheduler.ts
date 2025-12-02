@@ -190,7 +190,11 @@ export function useEjecutarTarea() {
       if (data.ok) {
         toast.success(`Ejecutado: ${data.items} items enviados`);
       } else {
-        toast.error(data.error || "Error en ejecución");
+        const msg =
+          typeof data.error === "string"
+            ? data.error
+            : data?.error?.message || "Error en ejecución";
+        toast.error(msg);
       }
       qc.invalidateQueries({ queryKey: ["cenabast-scheduler-logs"] });
       qc.invalidateQueries({ queryKey: ["cenabast-health"] });

@@ -55,6 +55,10 @@ export type InformarMovimientoParams = {
     cantidad: number;
     lote?: string;
     fecha_vencimiento?: string;
+    rut_proveedor?: string;
+    nro_factura?: string;
+    nro_guia_despacho?: string;
+    codigo_despacho?: string | number;
   }>;
 };
 
@@ -86,24 +90,21 @@ export function useCenabastAuth() {
     queryKey: ["cenabast-auth-status"],
     queryFn: async () => {
       const res = await fetch("/api/cenabast/auth");
+      if (!res.ok) throw new Error("No se pudo obtener estado de token");
       return res.json();
     },
     staleTime: 60000,
   });
 
-  const loginMutation = useMutation({
-    mutationFn: async (credentials: { usuario: string; clave: string }) => {
-      const res = await fetch("/api/cenabast/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(credentials),
-      });
+  const requestTokenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/cenabast/auth", { method: "POST" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || "Error autenticando");
+      if (!res.ok) throw new Error(data?.error?.message || "No se pudo solicitar token");
       return data;
     },
     onSuccess: () => {
-      toast.success("Autenticación CENABAST exitosa");
+      toast.success("Token solicitado a Mirth");
       qc.invalidateQueries({ queryKey: ["cenabast-auth-status"] });
       qc.invalidateQueries({ queryKey: ["cenabast-health"] });
     },
@@ -131,8 +132,8 @@ export function useCenabastAuth() {
   return {
     status: statusQuery.data,
     isLoading: statusQuery.isLoading,
-    login: loginMutation.mutate,
-    isLoggingIn: loginMutation.isPending,
+    requestToken: requestTokenMutation.mutate,
+    isRequesting: requestTokenMutation.isPending,
     refresh: refreshMutation.mutate,
     isRefreshing: refreshMutation.isPending,
   };
@@ -163,7 +164,7 @@ export function useInformarStock() {
         body: JSON.stringify(params),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || "Error informando stock");
+      if (!res.ok || data?.error) throw new Error(data?.error?.message || "Error informando stock");
       return data;
     },
     onSuccess: (data) => {
@@ -211,7 +212,7 @@ export function useInformarMovimiento() {
         body: JSON.stringify(params),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || "Error informando movimiento");
+      if (!res.ok || data?.error) throw new Error(data?.error?.message || "Error informando movimiento");
       return data;
     },
     onSuccess: (data) => {

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getPool, sql } from "@/lib/db";
 import { mirthSetReglasStock, mirthGetReglasStock } from "@/lib/mirth";
+import { getValidToken } from "@/lib/cenabast-token";
 
 export const runtime = "nodejs";
 
@@ -25,21 +26,6 @@ const getReglaSchema = z.object({
   idRelacion: z.coerce.number().int().positive(),
   codigoProducto: z.string().min(1),
 });
-
-/**
- * Obtiene el token CENABAST
- */
-async function getCenabastToken(): Promise<string | null> {
-  const pool = await getPool();
-  const result = await pool.request().query(`
-    SELECT token, expires_at 
-    FROM dbCenabast.dbo.TBL_cenabast_token 
-    WHERE id = 1
-  `);
-  const row = result.recordset[0];
-  if (!row?.token || new Date(row.expires_at) < new Date()) return null;
-  return row.token;
-}
 
 /**
  * POST /api/cenabast/stock/reglas
@@ -72,13 +58,14 @@ export async function POST(req: Request) {
     }
 
     // Obtener token
-    const token = await getCenabastToken();
-    if (!token) {
+    const tokenInfo = await getValidToken();
+    if (!tokenInfo) {
       return NextResponse.json(
-        { error: { message: "Token CENABAST no disponible" } },
-        { status: 401 }
+        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { status: 502 }
       );
     }
+    const token = tokenInfo.token;
 
     // Enviar a CENABAST vía Mirth
     const mirthResult = await mirthSetReglasStock(token, reglas);
@@ -160,13 +147,14 @@ export async function GET(req: Request) {
 
     const { solicitante, idRelacion, codigoProducto } = parsed.data;
 
-    const token = await getCenabastToken();
-    if (!token) {
+    const tokenInfo = await getValidToken();
+    if (!tokenInfo) {
       return NextResponse.json(
-        { error: { message: "Token CENABAST no disponible" } },
-        { status: 401 }
+        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { status: 502 }
       );
     }
+    const token = tokenInfo.token;
 
     // Consultar en CENABAST
     const mirthResult = await mirthGetReglasStock(token, {
@@ -225,13 +213,14 @@ export async function PUT(req: Request) {
       );
     }
 
-    const token = await getCenabastToken();
-    if (!token) {
+    const tokenInfo = await getValidToken();
+    if (!tokenInfo) {
       return NextResponse.json(
-        { error: { message: "Token CENABAST no disponible" } },
-        { status: 401 }
+        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { status: 502 }
       );
     }
+    const token = tokenInfo.token;
 
     // Obtener productos con stock min/max definido
     const pool = await getPool();

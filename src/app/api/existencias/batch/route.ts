@@ -6,8 +6,7 @@ import { getUserFromCookie } from "@/lib/auth";
 export const runtime = "nodejs";
 
 export async function PATCH(req: Request) {
-  const user = getUserFromCookie();
-  if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const user = getUserFromCookie() || { username: "system" };
 
   const body = await req.json().catch(() => null);
   const parsed = batchExistenciasSchema.safeParse(body);
@@ -25,9 +24,9 @@ export async function PATCH(req: Request) {
   const query = `
 UPDATE e
 SET
-    e.stock_minimo = u.stock_minimo,
-    e.stock_critico = u.stock_critico,
-    e.stock_maximo = u.stock_maximo,
+    e.stock_minimo = COALESCE(u.stock_minimo, e.stock_minimo),
+    e.stock_critico = COALESCE(u.stock_critico, e.stock_critico),
+    e.stock_maximo = COALESCE(u.stock_maximo, e.stock_maximo),
     e.fechaCarga = GETDATE()
 FROM dbCenabast.dbo.TBL_existencias_cenabast e
 JOIN OPENJSON(@updatesJson)

@@ -15,6 +15,7 @@ export async function GET(req: Request) {
 
   const {
     fechaDesde, fechaHasta, comuna, hospital, bodega, codigo, descripcion,
+    soloConExistencia,
     page, size, sort, dir,
   } = parsed.data;
 
@@ -30,6 +31,7 @@ export async function GET(req: Request) {
   request.input("bodega", sql.NVarChar(50), bodega ?? null);
   request.input("codigo", sql.NVarChar(50), codigo ?? null);
   request.input("descripcion", sql.NVarChar(255), descripcion ?? null);
+  request.input("soloConExistencia", sql.Bit, soloConExistencia ? 1 : 0);
   request.input("page", sql.Int, page);
   request.input("size", sql.Int, size);
   request.input("sort", sql.NVarChar(50), sSort);
@@ -63,6 +65,7 @@ WHERE
     AND (@codigo IS NULL OR e.codigo LIKE '%' + @codigo + '%'
                       OR e.codigo_zgen LIKE '%' + @codigo + '%')
     AND (@descripcion IS NULL OR e.descripcion LIKE '%' + @descripcion + '%')
+    AND (@soloConExistencia = 0 OR e.existencia > 0)
 ORDER BY
     CASE WHEN @sort='fechaCorte'   AND @dir='asc'  THEN e.fechaCorte END ASC,
     CASE WHEN @sort='fechaCorte'   AND @dir='desc' THEN e.fechaCorte END DESC,

@@ -64,6 +64,8 @@ import {
   ESTADO_LABELS,
   formatDiasSemana,
   type TipoTarea,
+  type EstadoEjecucion,
+  type ModoEjecucion,
   type TareaProgramada,
   type LogsFilters,
 } from "@/hooks/use-cenabast-scheduler";
@@ -314,6 +316,9 @@ export default function EnviosPage() {
   const [logsFilters, setLogsFilters] = useState<LogsFilters>({
     page: 1,
     size: 15,
+    tipo: "",
+    estado: "",
+    modo: "",
   });
 
   const { data: tareasData, isLoading: loadingTareas, refetch: refetchTareas } = useSchedulerTareas(true);
@@ -591,16 +596,20 @@ export default function EnviosPage() {
             {/* Filtros */}
             <div className="flex gap-3 mb-4 flex-wrap">
               <Select
-                value={logsFilters.tipo || ""}
+                value={logsFilters.tipo || "all"}
                 onValueChange={(v) =>
-                  setLogsFilters({ ...logsFilters, tipo: v as TipoTarea | "", page: 1 })
+                  setLogsFilters({
+                    ...logsFilters,
+                    tipo: v === "all" ? "" : (v as TipoTarea),
+                    page: 1,
+                  })
                 }
               >
                 <SelectTrigger className="w-[180px]">
                   <SelectValue placeholder="Todos los tipos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos los tipos</SelectItem>
+                  <SelectItem value="all">Todos los tipos</SelectItem>
                   {Object.entries(TIPO_TAREA_LABELS).map(([key, label]) => (
                     <SelectItem key={key} value={key}>
                       {label}
@@ -610,16 +619,20 @@ export default function EnviosPage() {
               </Select>
 
               <Select
-                value={logsFilters.estado || ""}
+                value={logsFilters.estado || "all"}
                 onValueChange={(v) =>
-                  setLogsFilters({ ...logsFilters, estado: v as any, page: 1 })
+                  setLogsFilters({
+                    ...logsFilters,
+                    estado: v === "all" ? "" : (v as EstadoEjecucion),
+                    page: 1,
+                  })
                 }
               >
                 <SelectTrigger className="w-[150px]">
                   <SelectValue placeholder="Todos los estados" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos</SelectItem>
+                  <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="COMPLETADO">Completado</SelectItem>
                   <SelectItem value="ERROR">Error</SelectItem>
                   <SelectItem value="EJECUTANDO">Ejecutando</SelectItem>
@@ -627,16 +640,20 @@ export default function EnviosPage() {
               </Select>
 
               <Select
-                value={logsFilters.modo || ""}
+                value={logsFilters.modo || "all"}
                 onValueChange={(v) =>
-                  setLogsFilters({ ...logsFilters, modo: v as any, page: 1 })
+                  setLogsFilters({
+                    ...logsFilters,
+                    modo: v === "all" ? "" : (v as ModoEjecucion),
+                    page: 1,
+                  })
                 }
               >
                 <SelectTrigger className="w-[150px]">
                   <SelectValue placeholder="Todos los modos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos</SelectItem>
+                  <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="AUTOMATICO">Automático</SelectItem>
                   <SelectItem value="MANUAL">Manual</SelectItem>
                 </SelectContent>

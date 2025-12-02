@@ -289,7 +289,7 @@ export default function CatalogoPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
             <Input
               placeholder="Código"
               value={draft.codigo}

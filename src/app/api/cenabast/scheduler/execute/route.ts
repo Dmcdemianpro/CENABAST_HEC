@@ -3,6 +3,7 @@
 
 import { NextResponse, NextRequest } from "next/server";
 import { getPool, sql } from "@/lib/db";
+import { getValidToken } from "@/lib/cenabast-token";
 
 export const runtime = "nodejs";
 
@@ -78,20 +79,6 @@ function calcularProximaEjecucion(hora: string, diasSemana: string): Date {
   manana.setDate(manana.getDate() + 1);
   manana.setHours(horaNum, minNum, 0, 0);
   return manana;
-}
-
-/**
- * Obtener token CENABAST de la BD
- */
-async function getToken(pool: any): Promise<string | null> {
-  try {
-    const result = await pool.request().query(`
-      SELECT token FROM TBL_cenabast_token WHERE id = 1 AND expires_at > GETDATE()
-    `);
-    return result.recordset[0]?.token || null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -288,7 +275,8 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const token = await getToken(pool);
+    const tokenInfo = await getValidToken();
+    const token = tokenInfo?.token;
     const resultados: any[] = [];
 
     for (const tarea of tareasResult.recordset) {
@@ -299,9 +287,9 @@ export async function GET(req: NextRequest) {
         .input("modo", sql.NVarChar(20), "AUTOMATICO")
         .input("estado", sql.NVarChar(20), "EJECUTANDO")
         .query(`
-          INSERT INTO TBL_cenabast_scheduler_log (scheduler_id, tipo, modo, estado)
+          INSERT INTO TBL_cenabast_scheduler_log (scheduler_id, tipo, modo, estado, fecha_inicio)
           OUTPUT INSERTED.id
-          VALUES (@scheduler_id, @tipo, @modo, @estado)
+          VALUES (@scheduler_id, @tipo, @modo, @estado, GETDATE())
         `);
 
       const logId = logResult.recordset[0].id;
@@ -392,33 +380,46 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { id } = body;
-
-    if (!id) {
-      return NextResponse.json(
-        { error: { message: "id de tarea requerido" } },
-        { status: 400 }
-      );
-    }
+    const body = await req.json().catch(() => ({}));
+    const { id, tipo, id_relacion, tipo_compra } = body || {};
 
     const pool = await getPool();
     await ensureTables(pool);
 
-    // Obtener tarea
-    const tareaResult = await pool.request()
-      .input("id", sql.Int, id)
-      .query("SELECT * FROM TBL_cenabast_scheduler WHERE id = @id");
+    // Obtener tarea: por id o ad-hoc (tipo, id_relacion, tipo_compra)
+    let tarea: any = null;
+    if (id) {
+      const tareaResult = await pool.request()
+        .input("id", sql.Int, id)
+        .query("SELECT * FROM TBL_cenabast_scheduler WHERE id = @id");
 
-    const tarea = tareaResult.recordset[0];
-    if (!tarea) {
+      tarea = tareaResult.recordset[0];
+      if (!tarea) {
+        return NextResponse.json(
+          { error: { message: "Tarea no encontrada" } },
+          { status: 404 }
+        );
+      }
+    } else if (tipo) {
+      tarea = {
+        id: null,
+        nombre: "Ejecución manual",
+        tipo,
+        id_relacion: id_relacion || 1,
+        tipo_compra: tipo_compra || "C",
+        hora_ejecucion: "00:00",
+        dias_semana: "1,2,3,4,5,6,7",
+        activo: true,
+      };
+    } else {
       return NextResponse.json(
-        { error: { message: "Tarea no encontrada" } },
-        { status: 404 }
+        { error: { message: "Debe enviar id de tarea o tipo de ejecución" } },
+        { status: 400 }
       );
     }
 
-    const token = await getToken(pool);
+    const tokenInfo = await getValidToken();
+    const token = tokenInfo?.token;
 
     // Crear log
     const logResult = await pool.request()
@@ -427,9 +428,9 @@ export async function POST(req: Request) {
       .input("modo", sql.NVarChar(20), "MANUAL")
       .input("estado", sql.NVarChar(20), "EJECUTANDO")
       .query(`
-        INSERT INTO TBL_cenabast_scheduler_log (scheduler_id, tipo, modo, estado)
+        INSERT INTO TBL_cenabast_scheduler_log (scheduler_id, tipo, modo, estado, fecha_inicio)
         OUTPUT INSERTED.id
-        VALUES (@scheduler_id, @tipo, @modo, @estado)
+        VALUES (@scheduler_id, @tipo, @modo, @estado, GETDATE())
       `);
 
     const logId = logResult.recordset[0].id;
@@ -477,15 +478,17 @@ export async function POST(req: Request) {
         WHERE id = @id
       `);
 
-    // Actualizar tarea
-    await pool.request()
-      .input("id", sql.Int, tarea.id)
-      .input("ultima", sql.DateTime, new Date())
-      .query(`
-        UPDATE TBL_cenabast_scheduler
-        SET ultima_ejecucion = @ultima, updated_at = GETDATE()
-        WHERE id = @id
-      `);
+    // Actualizar tarea (solo si es una tarea registrada)
+    if (tarea.id) {
+      await pool.request()
+        .input("id", sql.Int, tarea.id)
+        .input("ultima", sql.DateTime, new Date())
+        .query(`
+          UPDATE TBL_cenabast_scheduler
+          SET ultima_ejecucion = @ultima, updated_at = GETDATE()
+          WHERE id = @id
+        `);
+    }
 
     if (resultado.error) {
       return NextResponse.json({

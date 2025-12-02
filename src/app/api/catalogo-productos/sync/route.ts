@@ -13,9 +13,10 @@ function assertCronOrUser(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
 
-  // si tienes CRON_SECRET, exige Bearer CRON_SECRET
+  // si tienes CRON_SECRET, exige Bearer CRON_SECRET (pero en dev permite manual)
   if (cronSecret) {
     if (auth === `Bearer ${cronSecret}`) return;
+    if (process.env.NODE_ENV !== "production") return;
     throw new Error("No autorizado");
   }
 

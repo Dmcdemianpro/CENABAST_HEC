@@ -142,8 +142,15 @@ export async function mirthGetProductoById(
 
 export type StockDetalle = {
   codigo_interno: string;
-  codigo_generico: string;
-  cantidad: number;
+  codigo_generico: string | number;
+  cantidad_stock: number;
+  codigo_despacho?: string | number;
+  codigo_gtin?: string;
+  codigo_interno_despacho?: string;
+  rut_proveedor?: string;
+  descripcion_producto?: string;
+  descripcion_marca_comercial?: string;
+  pedido_compra_cenabast?: string;
 };
 
 export type InformarStockPayload = {
@@ -237,6 +244,7 @@ export type MovimientoDetalle = {
   rut_proveedor?: string;
   nro_factura?: string;
   nro_guia_despacho?: string;
+  codigo_despacho?: string | number;
 };
 
 export type InformarMovimientoPayload = {

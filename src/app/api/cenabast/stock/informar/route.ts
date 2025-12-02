@@ -1,10 +1,11 @@
 // src/app/api/cenabast/stock/informar/route.ts
-// Informar stock consolidado a CENABAST vía Mirth
+// Informar stock consolidado a CENABAST vía Mirth (v1.9)
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getPool, sql } from "@/lib/db";
 import { mirthInformarStock, type StockDetalle } from "@/lib/mirth";
+import { getValidToken } from "@/lib/cenabast-token";
 
 export const runtime = "nodejs";
 
@@ -17,40 +18,25 @@ const informarStockSchema = z.object({
     .array(
       z.object({
         codigo_interno: z.string(),
-        codigo_generico: z.string(),
-        cantidad: z.number().int().min(0),
+        codigo_generico: z.union([z.string(), z.number()]),
+        cantidad_stock: z.number().int().min(0),
+        codigo_despacho: z.union([z.string(), z.number()]).optional(),
+        codigo_gtin: z.string().optional(),
+        codigo_interno_despacho: z.string().optional(),
+        rut_proveedor: z.string().optional(),
+        descripcion_producto: z.string().optional(),
+        descripcion_marca_comercial: z.string().optional(),
+        pedido_compra_cenabast: z.string().optional(),
       })
     )
     .optional(),
 });
 
 /**
- * Obtiene el token CENABAST almacenado
- */
-async function getCenabastToken(): Promise<string | null> {
-  const pool = await getPool();
-  const result = await pool.request().query(`
-    SELECT token, expires_at 
-    FROM dbCenabast.dbo.TBL_cenabast_token 
-    WHERE id = 1
-  `);
-
-  const row = result.recordset[0];
-  if (!row?.token) return null;
-
-  // Verificar si está expirado
-  if (new Date(row.expires_at) < new Date()) {
-    return null;
-  }
-
-  return row.token;
-}
-
-/**
  * POST /api/cenabast/stock/informar
- * 
+ *
  * Envía el stock actual a CENABAST. Si no se envían productos,
- * los obtiene automáticamente de TBL_existencias_cenabast
+ * los obtiene automáticamente de TBL_existencias_cenabast.
  */
 export async function POST(req: Request) {
   try {
@@ -66,22 +52,22 @@ export async function POST(req: Request) {
 
     const { fecha_stock, id_relacion, productos } = parsed.data;
 
-    // Obtener token
-    const token = await getCenabastToken();
-    if (!token) {
+    // Obtener token directamente desde Mirth
+    const tokenInfo = await getValidToken();
+    if (!tokenInfo) {
       return NextResponse.json(
-        { error: { message: "Token CENABAST no disponible o expirado. Configure credenciales en /api/cenabast/auth" } },
-        { status: 401 }
+        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { status: 502 }
       );
     }
+    const token = tokenInfo.token;
 
     let stockDetalle: StockDetalle[];
 
     if (productos && productos.length > 0) {
-      // Usar productos enviados
       stockDetalle = productos;
     } else {
-      // Obtener de la base de datos
+      // Obtener desde BD y mapear a estructura v1.9
       const pool = await getPool();
       const result = await pool.request()
         .input("fecha", sql.Date, new Date(fecha_stock))
@@ -89,7 +75,8 @@ export async function POST(req: Request) {
           SELECT 
             e.codigo AS codigo_interno,
             COALESCE(e.codigo_zgen, e.codigo) AS codigo_generico,
-            SUM(e.existencia) AS cantidad
+            SUM(e.existencia) AS cantidad_stock,
+            MAX(e.descripcion) AS descripcion_producto
           FROM dbCenabast.dbo.TBL_existencias_cenabast e
           WHERE e.fechaCorte = @fecha
             AND e.codigo IS NOT NULL
@@ -107,7 +94,14 @@ export async function POST(req: Request) {
       stockDetalle = result.recordset.map((r) => ({
         codigo_interno: r.codigo_interno,
         codigo_generico: r.codigo_generico,
-        cantidad: r.cantidad,
+        cantidad_stock: r.cantidad_stock,
+        codigo_despacho: 0,
+        codigo_gtin: "",
+        codigo_interno_despacho: "",
+        rut_proveedor: "",
+        descripcion_producto: r.descripcion_producto || "",
+        descripcion_marca_comercial: "",
+        pedido_compra_cenabast: "",
       }));
     }
 
@@ -119,7 +113,6 @@ export async function POST(req: Request) {
     });
 
     if (!mirthResult.success) {
-      // Registrar error en auditoría
       const pool = await getPool();
       await pool.request()
         .input("accion", sql.VarChar(50), "INFORMAR_STOCK_ERROR")
@@ -135,7 +128,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Registrar éxito en auditoría
+    // Auditoría OK
     const pool = await getPool();
     await pool.request()
       .input("accion", sql.VarChar(50), "INFORMAR_STOCK_OK")
@@ -161,7 +154,7 @@ export async function POST(req: Request) {
 
 /**
  * GET /api/cenabast/stock/informar
- * 
+ *
  * Preview: muestra qué se enviaría sin enviarlo
  */
 export async function GET(req: Request) {
@@ -176,7 +169,8 @@ export async function GET(req: Request) {
         SELECT 
           e.codigo AS codigo_interno,
           COALESCE(e.codigo_zgen, e.codigo) AS codigo_generico,
-          SUM(e.existencia) AS cantidad,
+          SUM(e.existencia) AS cantidad_stock,
+          MAX(e.descripcion) AS descripcion_producto,
           COUNT(DISTINCT e.bodega) AS bodegas
         FROM dbCenabast.dbo.TBL_existencias_cenabast e
         WHERE e.fechaCorte = @fecha
@@ -189,7 +183,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       fecha,
       total_productos: result.recordset.length,
-      preview: result.recordset.slice(0, 20), // Primeros 20
+      preview: result.recordset.slice(0, 20),
       message: "Use POST para enviar a CENABAST",
     });
   } catch (err: any) {

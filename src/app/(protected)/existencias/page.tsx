@@ -12,6 +12,7 @@ import { DataTable } from "@/components/tables/data-table";
 import { existenciasColumns } from "./columns";
 import { DatePickerField } from "@/components/filters/date-picker-field";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type EditRow = {
   stock_minimo?: number;
@@ -30,6 +31,7 @@ export default function ExistenciasPage() {
     comuna: "",
     hospital: "",
     codigo: "",
+    soloConExistencia: false,
   });
 
   // filtros aplicados (los que disparan query)
@@ -39,6 +41,7 @@ export default function ExistenciasPage() {
     size: 20,
     sort: "fechaCorte",
     dir: "desc" as "asc" | "desc",
+    soloConExistencia: false,
   });
 
   const { data, isLoading, error } = useExistencias(applied);
@@ -101,7 +104,7 @@ export default function ExistenciasPage() {
   return (
     <div className="space-y-4">
       <SectionCard title="Existencias" className="bg-white border-slate-200">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 items-end">
           <DatePickerField
             value={draft.fechaDesde}
             onChange={(v) => setDraft((f) => ({ ...f, fechaDesde: v }))}
@@ -139,8 +142,20 @@ export default function ExistenciasPage() {
             onChange={(e) => setDraft((f) => ({ ...f, codigo: e.target.value }))}
             className="bg-white"
           />
+          <div className="flex items-center gap-2 text-sm text-slate-700">
+            <Checkbox
+              id="soloConExistencia"
+              checked={draft.soloConExistencia}
+              onCheckedChange={(v) =>
+                setDraft((f) => ({ ...f, soloConExistencia: Boolean(v) }))
+              }
+            />
+            <label htmlFor="soloConExistencia" className="cursor-pointer select-none">
+              Solo con existencias &gt; 0
+            </label>
+          </div>
 
-          <div className="md:col-span-6 flex flex-wrap gap-2 pt-2">
+          <div className="col-span-2 md:col-span-4 xl:col-span-8 flex flex-wrap gap-2 pt-2">
             <Button onClick={onApply} variant="default">
               Aplicar búsqueda
             </Button>
@@ -172,7 +187,7 @@ export default function ExistenciasPage() {
           }
           rowSelection={rowSelection}
           onRowSelectionChange={setRowSelection}
-          meta={{ edited, setEdited }}
+          meta={{ edited, setEdited, setRowSelection }}
           getRowId={(row: any) => String(row.id)}
         />
 

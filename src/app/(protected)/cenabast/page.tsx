@@ -9,13 +9,14 @@ import { es } from "date-fns/locale";
 import {
   RefreshCw,
   Send,
-  Shield,
   Database,
   Activity,
   CheckCircle2,
   XCircle,
   AlertTriangle,
   Server,
+  ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 
 import { SectionCard } from "@/components/ui/section-card";
@@ -41,6 +42,12 @@ import {
   useReglasStock,
 } from "@/hooks/use-cenabast";
 
+const DEFAULT_ID_RELACION = Number(
+  process.env.NEXT_PUBLIC_CENABAST_ID_RELACION ||
+    process.env.CENABAST_ID_RELACION ||
+    1
+);
+
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { variant: "default" | "secondary" | "destructive"; icon: any }> = {
     ok: { variant: "default", icon: CheckCircle2 },
@@ -63,6 +70,34 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function TokenCountdown({ expiresAt }: { expiresAt: string }) {
+  const expires = new Date(expiresAt);
+  const diffMs = expires.getTime() - Date.now();
+  if (isNaN(diffMs)) return null;
+  const minutes = Math.max(0, Math.round(diffMs / (1000 * 60)));
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+
+  const label =
+    hours > 0
+      ? `${hours}h ${mins}m`
+      : `${mins}m`;
+
+  return <span>Quedan {label}</span>;
+}
+
+function RelationPill({ value }: { value: string }) {
+  return (
+    <div className="text-xs text-slate-600">
+      <div className="font-semibold text-slate-800">Relación</div>
+      <div className="inline-flex items-center gap-2 rounded-lg bg-sky-50 px-3 py-2 text-sky-700 border border-sky-100 shadow-sm">
+        <Server className="h-4 w-4" />
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function CenabastPage() {
   const { data: health, isLoading: healthLoading, refetch: refetchHealth } = useCenabastHealth();
   const auth = useCenabastAuth();
@@ -70,19 +105,16 @@ export default function CenabastPage() {
   const movimiento = useInformarMovimiento();
   const reglas = useReglasStock();
 
-  // Estado del formulario de autenticación
-  const [authForm, setAuthForm] = useState({ usuario: "", clave: "" });
-
   // Estado para informar stock
   const [stockForm, setStockForm] = useState({
     fecha: format(new Date(), "yyyy-MM-dd"),
-    idRelacion: "1",
+    idRelacion: String(DEFAULT_ID_RELACION),
   });
 
   // Estado para informar movimiento
   const [movForm, setMovForm] = useState({
     fecha: format(new Date(), "yyyy-MM-dd"),
-    idRelacion: "1",
+    idRelacion: String(DEFAULT_ID_RELACION),
     tipoMovimiento: "E" as "E" | "S",
     tipoCompra: "C" as "C" | "M",
   });
@@ -90,7 +122,7 @@ export default function CenabastPage() {
   // Estado para sincronizar reglas
   const [reglasForm, setReglasForm] = useState({
     rutSolicitante: process.env.NEXT_PUBLIC_CENABAST_RUT || "",
-    idRelacion: "1",
+    idRelacion: String(DEFAULT_ID_RELACION),
   });
 
   return (
@@ -136,7 +168,7 @@ export default function CenabastPage() {
             <SectionCard className="p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Shield className="h-5 w-5 text-slate-500" />
+                  <ShieldCheck className="h-5 w-5 text-slate-500" />
                   <span className="font-medium">Token CENABAST</span>
                 </div>
                 <StatusBadge status={health?.components?.cenabast_token?.status || "error"} />
@@ -176,59 +208,69 @@ export default function CenabastPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Autenticación */}
-        <SectionCard title="Autenticación CENABAST">
+        <SectionCard title="Token CENABAST (Mirth)" className="bg-gradient-to-br from-sky-50 via-white to-emerald-50 border-sky-100">
           <div className="space-y-4">
-            {auth.status?.hasToken ? (
-              <div className="p-3 bg-emerald-50 rounded-lg text-sm">
-                <p className="font-medium text-emerald-800">Token activo</p>
-                <p className="text-emerald-600">
-                  Expira: {auth.status.expiresAt ? format(new Date(auth.status.expiresAt), "dd/MM/yyyy HH:mm", { locale: es }) : "N/A"}
-                </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="rounded-full bg-emerald-50 p-2 text-emerald-600">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-medium text-slate-900">Estado del token</p>
+                  <p className="text-xs text-slate-500">
+                    {auth.status?.hasToken
+                      ? auth.status.expiresAt
+                        ? `Expira ${format(new Date(auth.status.expiresAt), "dd/MM/yyyy HH:mm", { locale: es })}`
+                        : "Token vigente"
+                      : "Se solicitará automáticamente al enviar a CENABAST"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
                 <Button
-                  size="sm"
                   variant="outline"
-                  className="mt-2"
+                  onClick={() => auth.requestToken()}
+                  disabled={auth.isRequesting}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {auth.isRequesting ? "Solicitando..." : "Pedir a Mirth"}
+                </Button>
+                <Button
+                  variant="secondary"
                   onClick={() => auth.refresh()}
                   disabled={auth.isRefreshing}
                 >
-                  <RefreshCw className={`mr-2 h-3 w-3 ${auth.isRefreshing ? "animate-spin" : ""}`} />
-                  Refrescar token
+                  <RefreshCw className={`mr-2 h-4 w-4 ${auth.isRefreshing ? "animate-spin" : ""}`} />
+                  Refrescar
                 </Button>
               </div>
-            ) : (
-              <div className="space-y-3">
-                <div>
-                  <Label>Usuario CENABAST</Label>
-                  <Input
-                    placeholder="usuario@cenabast.cl"
-                    value={authForm.usuario}
-                    onChange={(e) => setAuthForm({ ...authForm, usuario: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label>Clave</Label>
-                  <Input
-                    type="password"
-                    placeholder="••••••••"
-                    value={authForm.clave}
-                    onChange={(e) => setAuthForm({ ...authForm, clave: e.target.value })}
-                  />
-                </div>
-                <Button
-                  onClick={() => auth.login(authForm)}
-                  disabled={auth.isLoggingIn || !authForm.usuario || !authForm.clave}
-                >
-                  {auth.isLoggingIn ? "Autenticando..." : "Iniciar sesión"}
-                </Button>
-              </div>
-            )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <StatusBadge
+                status={
+                  auth.status?.hasToken
+                    ? auth.status.isExpired
+                    ? "warning"
+                    : "ok"
+                    : "warning"
+                }
+              />
+              {auth.status?.expiresAt && (
+                <TokenCountdown expiresAt={auth.status.expiresAt} />
+              )}
+              {auth.status?.message && <span>{auth.status.message}</span>}
+            </div>
+            <p className="text-xs text-slate-500">
+              Esta acción pide un token a Mirth y lo guarda para todos los envíos hacia CENABAST.
+            </p>
           </div>
         </SectionCard>
 
         {/* Informar Stock */}
-        <SectionCard title="Informar Stock a CENABAST">
+        <SectionCard title="Informar Stock a CENABAST" className="bg-gradient-to-br from-white via-sky-50 to-white border-slate-200 shadow-sm">
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 items-end">
               <div>
                 <Label>Fecha de stock</Label>
                 <DatePickerField
@@ -236,14 +278,7 @@ export default function CenabastPage() {
                   onChange={(v) => setStockForm({ ...stockForm, fecha: v })}
                 />
               </div>
-              <div>
-                <Label>ID Relación</Label>
-                <Input
-                  type="number"
-                  value={stockForm.idRelacion}
-                  onChange={(e) => setStockForm({ ...stockForm, idRelacion: e.target.value })}
-                />
-              </div>
+              <RelationPill value={stockForm.idRelacion} />
             </div>
 
             <Button
@@ -253,24 +288,21 @@ export default function CenabastPage() {
                   id_relacion: Number(stockForm.idRelacion),
                 })
               }
-              disabled={stock.isLoading || !auth.status?.hasToken}
+              disabled={stock.isLoading}
             >
               <Send className="mr-2 h-4 w-4" />
               {stock.isLoading ? "Enviando..." : "Enviar stock"}
             </Button>
-
-            {!auth.status?.hasToken && (
-              <p className="text-xs text-amber-600">
-                Configure credenciales primero
-              </p>
-            )}
+            <p className="text-xs text-slate-500">
+              Envia el stock consolidado de la fecha seleccionada a CENABAST a través de Mirth.
+            </p>
           </div>
         </SectionCard>
 
         {/* Informar Movimientos */}
-        <SectionCard title="Informar Movimientos a CENABAST">
+        <SectionCard title="Informar Movimientos a CENABAST" className="bg-gradient-to-br from-white via-emerald-50 to-white border-slate-200 shadow-sm">
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 items-end">
               <div>
                 <Label>Fecha</Label>
                 <DatePickerField
@@ -278,14 +310,10 @@ export default function CenabastPage() {
                   onChange={(v) => setMovForm({ ...movForm, fecha: v })}
                 />
               </div>
-              <div>
-                <Label>ID Relación</Label>
-                <Input
-                  type="number"
-                  value={movForm.idRelacion}
-                  onChange={(e) => setMovForm({ ...movForm, idRelacion: e.target.value })}
-                />
-              </div>
+              <RelationPill value={movForm.idRelacion} />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <Label>Tipo movimiento</Label>
                 <Select
@@ -327,21 +355,24 @@ export default function CenabastPage() {
                   tipo_compra: movForm.tipoCompra,
                 })
               }
-              disabled={movimiento.isLoading || !auth.status?.hasToken}
+              disabled={movimiento.isLoading}
             >
               <Send className="mr-2 h-4 w-4" />
               {movimiento.isLoading ? "Enviando..." : "Enviar movimientos"}
             </Button>
+            <p className="text-xs text-slate-500">
+              Toma los movimientos del día y los envía al canal de movimientos en Mirth para CENABAST.
+            </p>
           </div>
         </SectionCard>
 
         {/* Sincronizar Reglas */}
-        <SectionCard title="Sincronizar Reglas de Stock">
+        <SectionCard title="Sincronizar Reglas de Stock" className="bg-gradient-to-br from-white via-indigo-50 to-white border-slate-200 shadow-sm">
           <div className="space-y-4">
             <p className="text-sm text-slate-500">
               Envía las reglas de stock mínimo/máximo configuradas localmente a CENABAST.
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 items-end">
               <div>
                 <Label>RUT Solicitante</Label>
                 <Input
@@ -350,14 +381,7 @@ export default function CenabastPage() {
                   onChange={(e) => setReglasForm({ ...reglasForm, rutSolicitante: e.target.value })}
                 />
               </div>
-              <div>
-                <Label>ID Relación</Label>
-                <Input
-                  type="number"
-                  value={reglasForm.idRelacion}
-                  onChange={(e) => setReglasForm({ ...reglasForm, idRelacion: e.target.value })}
-                />
-              </div>
+              <RelationPill value={reglasForm.idRelacion} />
             </div>
 
             <Button
@@ -367,11 +391,14 @@ export default function CenabastPage() {
                   idRelacion: Number(reglasForm.idRelacion),
                 })
               }
-              disabled={reglas.isSyncing || !auth.status?.hasToken}
+              disabled={reglas.isSyncing}
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${reglas.isSyncing ? "animate-spin" : ""}`} />
               {reglas.isSyncing ? "Sincronizando..." : "Sincronizar reglas"}
             </Button>
+            <p className="text-xs text-slate-500">
+              Envía los niveles mínimos y máximos configurados localmente al canal de reglas en Mirth.
+            </p>
           </div>
         </SectionCard>
       </div>

@@ -44,17 +44,26 @@ function EditableNumber({
 
   return (
     <Input
-      type="number"
-      min={0}
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
       value={display}
       onChange={(e) => {
-        const num = e.target.value === "" ? undefined : Number(e.target.value);
+        const raw = e.target.value.replace(/[^0-9]/g, "");
+        const num = raw === "" ? undefined : Number(raw);
         tableMeta?.setEdited((prev: any) => ({
           ...prev,
           [rowId]: { ...prev[rowId], [field]: num },
         }));
+        // Selecciona la fila automáticamente al editar
+        tableMeta?.setRowSelection?.((prev: any) => ({
+          ...prev,
+          [rowId]: true,
+        }));
       }}
       className="h-8 w-24 bg-white text-right"
+      onFocus={(e) => e.target.select()}
+      step={1}
     />
   );
 }

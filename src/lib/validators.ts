@@ -15,6 +15,7 @@ export const existenciasFiltersSchema = z.object({
   bodega: z.string().optional().nullable(),
   codigo: z.string().optional().nullable(),
   descripcion: z.string().optional().nullable(),
+  soloConExistencia: z.coerce.boolean().optional().nullable(),
 }).merge(paginationSchema);
 
 export const movimientosFiltersSchema = z.object({
@@ -33,16 +34,32 @@ export const movimientosFiltersSchema = z.object({
 export const batchExistenciasSchema = z.object({
   updates: z.array(z.object({
     id: z.number().int(),
-    stock_minimo: z.number().min(0),
-    stock_critico: z.number().min(0),
-    stock_maximo: z.number().min(0),
+    stock_minimo: z.number().min(0).optional(),
+    stock_critico: z.number().min(0).optional(),
+    stock_maximo: z.number().min(0).optional(),
   })).min(1),
 }).superRefine((val, ctx) => {
   for (const u of val.updates) {
-    if (!(u.stock_minimo <= u.stock_critico && u.stock_critico <= u.stock_maximo)) {
+    // todos los campos opcionales, pero si se envían, respetar orden
+    if (
+      u.stock_minimo != null &&
+      u.stock_critico != null &&
+      u.stock_maximo != null &&
+      !(u.stock_minimo <= u.stock_critico && u.stock_critico <= u.stock_maximo)
+    ) {
       ctx.addIssue({
         code: "custom",
         message: `Regla stock_minimo <= stock_critico <= stock_maximo incumplida (id ${u.id})`,
+      });
+    }
+    if (
+      u.stock_minimo == null &&
+      u.stock_critico == null &&
+      u.stock_maximo == null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Debe enviar al menos un valor para actualizar (id ${u.id})`,
       });
     }
   }

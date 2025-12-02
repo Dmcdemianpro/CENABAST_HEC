@@ -18,10 +18,13 @@ export function DataTable<T>({
   page,
   size,
   sorting,
+  rowSelection,
   onPageChange,
   onSizeChange,
   onSortingChange,
+  onRowSelectionChange,
   getRowId,
+  meta,
 }: {
   columns: ColumnDef<T, any>[];
   data: T[];
@@ -29,12 +32,16 @@ export function DataTable<T>({
   page: number;
   size: number;
   sorting: { id: string; desc: boolean };
+  rowSelection?: RowSelectionState;
   onPageChange: (p: number) => void;
   onSizeChange: (s: number) => void;
   onSortingChange: (sort: string, dir: "asc" | "desc") => void;
+  onRowSelectionChange?: (s: RowSelectionState) => void;
   getRowId: (row: T) => string;
+  meta?: any;
 }) {
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [internalRowSelection, setInternalRowSelection] = useState<RowSelectionState>({});
+  const selectionState = rowSelection ?? internalRowSelection;
   const sortingState: SortingState = [{ id: sorting.id, desc: sorting.desc }];
 
   const table = useReactTable({
@@ -46,9 +53,14 @@ export function DataTable<T>({
     pageCount: Math.ceil(total / size),
     state: {
       sorting: sortingState,
-      rowSelection,
+      rowSelection: selectionState,
     },
-    onRowSelectionChange: setRowSelection,
+    onRowSelectionChange: (updater) => {
+      const next =
+        typeof updater === "function" ? updater(selectionState) : updater;
+      if (onRowSelectionChange) onRowSelectionChange(next);
+      else setInternalRowSelection(next);
+    },
     onSortingChange: (updater) => {
       const next = typeof updater === "function" ? updater(sortingState) : updater;
       const s = next[0];
@@ -57,6 +69,7 @@ export function DataTable<T>({
     },
     getRowId,
     enableRowSelection: true,
+    meta,
   });
 
   const pageCount = table.getPageCount();

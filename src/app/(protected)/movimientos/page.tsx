@@ -38,7 +38,7 @@ export default function MovimientosPage() {
   return (
     <div className="space-y-4">
       <SectionCard title="Movimientos" className="bg-white border-slate-200">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 items-end">
           <DatePickerField
             value={draft.fechaDesde}
             onChange={(v) => setDraft((f) => ({ ...f, fechaDesde: v }))}
@@ -77,7 +77,7 @@ export default function MovimientosPage() {
             className="bg-white"
           />
 
-          <div className="md:col-span-6 flex gap-2 pt-2">
+          <div className="col-span-2 md:col-span-4 xl:col-span-8 flex flex-wrap gap-2 pt-2">
             <Button onClick={onApply}>Aplicar búsqueda</Button>
           </div>
         </div>

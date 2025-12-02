@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { getTokenStatus } from "@/lib/cenabast-token";
 
 export const runtime = "nodejs";
 
@@ -57,45 +58,21 @@ export async function GET() {
 
   // 2. Verificar token CENABAST
   try {
-    const pool = await getPool();
-    
-    // Verificar si la tabla existe
-    const tableCheck = await pool.request().query(`
-      SELECT OBJECT_ID('TBL_cenabast_token', 'U') AS table_exists
-    `);
-    
-    if (!tableCheck.recordset[0]?.table_exists) {
-      results.components.cenabast_token = { 
-        status: "warning", 
-        message: "Tabla de token no existe. Configure credenciales primero." 
-      };
-    } else {
-      const tokenResult = await pool.request().query(`
-        SELECT token, expires_at 
-        FROM TBL_cenabast_token 
-        WHERE id = 1
-      `);
-      
-      const row = tokenResult.recordset[0];
-      if (!row?.token) {
-        results.components.cenabast_token = { 
-          status: "warning", 
-          message: "No hay token configurado" 
-        };
-      } else {
-        const expiresAt = new Date(row.expires_at);
-        const isExpired = expiresAt < new Date();
-        const hoursRemaining = Math.max(0, Math.round((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60)));
-        
-        results.components.cenabast_token = {
-          status: isExpired ? "error" : hoursRemaining < 2 ? "warning" : "ok",
-          expires_at: row.expires_at,
-          hours_remaining: hoursRemaining,
-          message: isExpired ? "Token expirado" : 
-                   hoursRemaining < 2 ? "Token próximo a expirar" : "Token válido",
-        };
-      }
-    }
+    const tokenStatus = await getTokenStatus();
+    const hoursRemaining = tokenStatus.hoursRemaining ?? 0;
+
+    results.components.cenabast_token = {
+      status: tokenStatus.hasToken
+        ? tokenStatus.isExpired
+          ? "error"
+          : hoursRemaining < 2
+          ? "warning"
+          : "ok"
+        : "warning",
+      expires_at: tokenStatus.expiresAt,
+      hours_remaining: hoursRemaining,
+      message: tokenStatus.message,
+    };
   } catch (err: any) {
     results.components.cenabast_token = { 
       status: "warning", 

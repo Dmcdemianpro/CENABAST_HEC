@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getPool, sql } from "@/lib/db";
 import { mirthInformarMovimiento, type MovimientoDetalle } from "@/lib/mirth";
+import { getValidToken } from "@/lib/cenabast-token";
 
 export const runtime = "nodejs";
 
@@ -26,28 +27,11 @@ const informarMovimientoSchema = z.object({
         rut_proveedor: z.string().optional(),
         nro_factura: z.string().optional(),
         nro_guia_despacho: z.string().optional(),
+        codigo_despacho: z.union([z.string(), z.number()]).optional(),
       })
     )
     .optional(),
 });
-
-/**
- * Obtiene el token CENABAST almacenado
- */
-async function getCenabastToken(): Promise<string | null> {
-  const pool = await getPool();
-  const result = await pool.request().query(`
-    SELECT token, expires_at 
-    FROM dbCenabast.dbo.TBL_cenabast_token 
-    WHERE id = 1
-  `);
-
-  const row = result.recordset[0];
-  if (!row?.token) return null;
-  if (new Date(row.expires_at) < new Date()) return null;
-
-  return row.token;
-}
 
 /**
  * Mapea tipo de documento local a tipo_movimiento CENABAST
@@ -84,14 +68,15 @@ export async function POST(req: Request) {
 
     const { fecha_movimiento, id_relacion, tipo_movimiento, tipo_compra, detalles } = parsed.data;
 
-    // Obtener token
-    const token = await getCenabastToken();
-    if (!token) {
+    // Obtener token directo desde Mirth
+    const tokenInfo = await getValidToken();
+    if (!tokenInfo) {
       return NextResponse.json(
-        { error: { message: "Token CENABAST no disponible o expirado" } },
-        { status: 401 }
+        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { status: 502 }
       );
     }
+    const token = tokenInfo.token;
 
     let movimientoDetalle: MovimientoDetalle[];
 
@@ -111,7 +96,9 @@ export async function POST(req: Request) {
             m.numero_lote AS lote,
             m.vencimiento AS fecha_vencimiento,
             m.rut AS rut_proveedor,
-            m.numero AS nro_factura
+            m.numero AS nro_factura,
+            m.codigo_despacho,
+            m.numero_guia_despacho
           FROM dbCenabast.dbo.TBL_movimientos_cenabast m
           WHERE m.fechaMovimiento = @fecha
             AND m.codigo IS NOT NULL
@@ -122,10 +109,12 @@ export async function POST(req: Request) {
         `);
 
       if (result.recordset.length === 0) {
-        return NextResponse.json(
-          { error: { message: `No hay movimientos tipo ${tipo_movimiento} para ${fecha_movimiento}` } },
-          { status: 404 }
-        );
+        return NextResponse.json({
+          ok: false,
+          error: { message: `No hay movimientos tipo ${tipo_movimiento} para ${fecha_movimiento}` },
+          items_enviados: 0,
+          response: null,
+        });
       }
 
       movimientoDetalle = result.recordset.map((r) => ({
@@ -138,6 +127,8 @@ export async function POST(req: Request) {
           : undefined,
         rut_proveedor: r.rut_proveedor || undefined,
         nro_factura: r.nro_factura || undefined,
+        codigo_despacho: r.codigo_despacho || undefined,
+        nro_guia_despacho: r.numero_guia_despacho || undefined,
       }));
     }
 
