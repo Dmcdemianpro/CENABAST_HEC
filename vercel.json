@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/catalogo-productos/sync",
-      "schedule": "0 5 * * *"
+      "path": "/api/cenabast/scheduler/execute",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

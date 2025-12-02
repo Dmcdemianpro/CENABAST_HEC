@@ -1,5 +1,5 @@
 // src/components/layout/topnav.tsx
-// Navegación principal con integración CENABAST completa
+// Navegación principal actualizada con integración CENABAST
 
 "use client";
 
@@ -12,7 +12,6 @@ import {
   ArrowLeftRight,
   BookOpen,
   Cloud,
-  Calendar,
 } from "lucide-react";
 
 const items = [
@@ -21,24 +20,22 @@ const items = [
   { href: "/movimientos", label: "Movimientos", icon: ArrowLeftRight },
   { href: "/catalogo", label: "Catálogo", icon: BookOpen },
   { href: "/cenabast", label: "CENABAST", icon: Cloud },
-  { href: "/cenabast/envios", label: "Envíos Auto", icon: Calendar },
 ];
 
 export function TopNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex gap-1 rounded-xl bg-slate-100 p-1 overflow-x-auto">
+    <nav className="flex gap-1 rounded-xl bg-slate-100 p-1">
       {items.map((it) => {
-        const active = pathname === it.href || 
-          (it.href !== "/" && pathname.startsWith(it.href));
+        const active = pathname === it.href;
         const Icon = it.icon;
         return (
           <Link
             key={it.href}
             href={it.href}
             className={cn(
-              "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
+              "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition",
               active
                 ? "bg-white text-slate-900 shadow-sm"
                 : "text-slate-600 hover:text-slate-900 hover:bg-white/60"
