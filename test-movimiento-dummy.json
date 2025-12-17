@@ -1,0 +1,73 @@
+{
+  "descripcion": "Datos dummy para probar canal de Movimiento CENABAST",
+  "version": "1.0",
+  "nota": "Estos datos son ficticios pero válidos según la estructura requerida por CENABAST",
+
+  "movimiento_entrada": {
+    "id_relacion": 286,
+    "fecha_movimiento": "2025-12-16",
+    "tipo_movimiento": "E",
+    "tipo_compra": "C",
+    "movimiento_detalle": [
+      {
+        "codigo_interno": "TEST001",
+        "codigo_generico": 123456,
+        "cantidad": 100,
+        "lote": "LOTE-TEST-001",
+        "fecha_vencimiento": "2026-12-31",
+        "rut_proveedor": "76186755-5",
+        "nro_factura": "FAC-TEST-001",
+        "codigo_despacho": 0
+      },
+      {
+        "codigo_interno": "TEST002",
+        "codigo_generico": 789012,
+        "cantidad": 50,
+        "lote": "LOTE-TEST-002",
+        "fecha_vencimiento": "2027-06-30",
+        "rut_proveedor": "76030398-4",
+        "nro_factura": "FAC-TEST-002",
+        "codigo_despacho": 0
+      },
+      {
+        "codigo_interno": "TEST003",
+        "codigo_generico": 345678,
+        "cantidad": 200,
+        "lote": "LOTE-TEST-003",
+        "fecha_vencimiento": "2026-03-15",
+        "rut_proveedor": "76451127-1",
+        "nro_factura": "FAC-TEST-003",
+        "codigo_despacho": 0
+      }
+    ]
+  },
+
+  "movimiento_salida": {
+    "id_relacion": 286,
+    "fecha_movimiento": "2025-12-16",
+    "tipo_movimiento": "S",
+    "tipo_compra": "C",
+    "movimiento_detalle": [
+      {
+        "codigo_interno": "TEST004",
+        "codigo_generico": 456789,
+        "cantidad": 30,
+        "lote": "LOTE-TEST-004",
+        "fecha_vencimiento": "2026-09-20",
+        "rut_proveedor": "77354932-K",
+        "nro_guia_despacho": "GD-TEST-001",
+        "codigo_despacho": 0
+      },
+      {
+        "codigo_interno": "TEST005",
+        "codigo_generico": 901234,
+        "cantidad": 75,
+        "lote": "LOTE-TEST-005",
+        "fecha_vencimiento": "2027-01-10",
+        "rut_proveedor": "87674400-7",
+        "nro_guia_despacho": "GD-TEST-002",
+        "codigo_despacho": 0
+      }
+    ]
+  }
+}
