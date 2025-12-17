@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getValidToken } from "@/lib/cenabast-token";
+import { transformarMovimientoParaCenabast } from "@/lib/cenabast-transform";
 
 const MIRTH_HOST = process.env.MIRTH_HOST || "10.7.71.64";
 const MIRTH_PORT_MOVIMIENTO = 6664;
@@ -40,8 +41,8 @@ export async function GET(request: NextRequest) {
 
     console.log("[TEST-MIRTH] Token obtenido correctamente");
 
-    // Datos dummy según tipo de movimiento
-    const datosTest = tipo === "E" ? {
+    // Datos dummy RAW (con formatos incorrectos - como vendrían de la BD)
+    const datosTestRaw = tipo === "E" ? {
       id_relacion: 286,
       fecha_movimiento: new Date().toISOString().split("T")[0],
       tipo_movimiento: "E",
@@ -49,22 +50,22 @@ export async function GET(request: NextRequest) {
       movimiento_detalle: [
         {
           codigo_interno: "TEST-ENTRADA-001",
-          codigo_generico: 999001,
+          codigo_generico: "999001", // String - será convertido a int
           cantidad: 100,
           lote: "LOTE-TEST-E-001",
           fecha_vencimiento: "2026-12-31",
-          rut_proveedor: "76186755-5",
-          nro_factura: "FACTURA-TEST-001",
-          codigo_despacho: 0,
+          rut_proveedor: "76186755-5", // Con DV - será limpiado
+          nro_factura: "698201", // String - será convertido a int
+          codigo_despacho: 0, // 0 - será omitido
         },
         {
           codigo_interno: "TEST-ENTRADA-002",
-          codigo_generico: 999002,
+          codigo_generico: "999002",
           cantidad: 50,
           lote: "LOTE-TEST-E-002",
           fecha_vencimiento: "2027-06-30",
           rut_proveedor: "76030398-4",
-          nro_factura: "FACTURA-TEST-002",
+          nro_factura: "698202",
           codigo_despacho: 0,
         },
       ],
@@ -76,28 +77,52 @@ export async function GET(request: NextRequest) {
       movimiento_detalle: [
         {
           codigo_interno: "TEST-SALIDA-001",
-          codigo_generico: 999003,
+          codigo_generico: "999003",
           cantidad: 30,
           lote: "LOTE-TEST-S-001",
           fecha_vencimiento: "2026-09-20",
-          rut_proveedor: "77354932-K",
-          nro_guia_despacho: "GUIA-TEST-001",
+          rut_proveedor: "77354932-K", // Con DV - será limpiado
+          nro_guia_despacho: "555611478", // String - será convertido a int
           codigo_despacho: 0,
         },
         {
           codigo_interno: "TEST-SALIDA-002",
-          codigo_generico: 999004,
+          codigo_generico: "999004",
           cantidad: 75,
           lote: "LOTE-TEST-S-002",
           fecha_vencimiento: "2027-01-10",
           rut_proveedor: "87674400-7",
-          nro_guia_despacho: "GUIA-TEST-002",
+          nro_guia_despacho: "555611479",
           codigo_despacho: 0,
         },
       ],
     };
 
-    console.log("[TEST-MIRTH] Datos preparados:", JSON.stringify(datosTest, null, 2));
+    console.log("[TEST-MIRTH] Datos RAW (antes de transformar):", JSON.stringify(datosTestRaw, null, 2));
+
+    // TRANSFORMAR según especificación CENABAST v1.9
+    const transformacion = transformarMovimientoParaCenabast(datosTestRaw);
+
+    // Si hay errores, no enviar
+    if (transformacion.errores.length > 0) {
+      console.error("[TEST-MIRTH] Errores de validación:", transformacion.errores);
+      return NextResponse.json({
+        success: false,
+        test: "CANAL DE MOVIMIENTO",
+        tipo: tipo === "E" ? "Entrada" : "Salida",
+        error: {
+          message: "Errores en datos de prueba",
+          errores: transformacion.errores,
+        }
+      }, { status: 200 });
+    }
+
+    if (transformacion.warnings.length > 0) {
+      console.warn("[TEST-MIRTH] Warnings:", transformacion.warnings);
+    }
+
+    const datosTest = transformacion.data;
+    console.log("[TEST-MIRTH] Datos TRANSFORMADOS (según CENABAST v1.9):", JSON.stringify(datosTest, null, 2));
 
     // Enviar a Mirth
     const mirthUrl = `http://${MIRTH_HOST}:${MIRTH_PORT_MOVIMIENTO}/cenabast/movimiento`;

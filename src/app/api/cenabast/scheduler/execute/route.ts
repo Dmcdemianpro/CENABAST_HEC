@@ -6,6 +6,7 @@ import { getPool, sql } from "@/lib/db";
 import { getValidToken } from "@/lib/cenabast-token";
 import { toSqlDate, sanitizeSqlDate } from "@/lib/date-validator";
 import { parseMirthError, formatMirthErrorForLog } from "@/lib/mirth-error-handler";
+import { transformarMovimientoParaCenabast } from "@/lib/cenabast-transform";
 
 export const runtime = "nodejs";
 
@@ -258,22 +259,44 @@ async function ejecutarMovimiento(pool: any, tarea: any, token: string, tipo: "E
     const items = movResult.recordset.map((row: any) => {
       // Sanitizar fecha_vencimiento
       const fechaVencimiento = sanitizeSqlDate(row.fecha_vencimiento);
-
       const esGuia = row.tipoDocumento === "Guia Despacho";
 
       return {
         codigo_interno: row.codigo_interno,
-        codigo_generico: Number(row.codigo_generico) || 0,
-        cantidad: Number(row.cantidad) || 0,
-        lote: row.lote || undefined,
+        codigo_generico: row.codigo_generico,
+        cantidad: row.cantidad,
+        lote: row.lote,
         fecha_vencimiento: fechaVencimiento,
-        rut_proveedor: row.rut_proveedor ? String(row.rut_proveedor) : undefined,
-        nro_factura: !esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
-        nro_guia_despacho: esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
-        codigo_despacho: row.codigo_despacho != null ? Number(row.codigo_despacho) : 0,
-        codigo_gtin: undefined,
+        rut_proveedor: row.rut_proveedor,
+        nro_doc: row.nro_doc,
+        nro_factura: !esGuia ? row.nro_doc : undefined,
+        nro_guia_despacho: esGuia ? row.nro_doc : undefined,
+        codigo_despacho: row.codigo_despacho,
+        codigo_gtin: row.codigo_gtin,
       };
     });
+
+    // TRANSFORMAR según especificación CENABAST v1.9
+    const movimientoDataRaw = {
+      id_relacion: tarea.id_relacion || DEFAULT_ID_RELACION,
+      fecha_movimiento: fechaHoy,
+      tipo_movimiento: tipo,
+      tipo_compra: tarea.tipo_compra || "C",
+      movimiento_detalle: items,
+    };
+
+    const transformacion = transformarMovimientoParaCenabast(movimientoDataRaw);
+
+    // Si hay errores, no enviar
+    if (transformacion.errores.length > 0) {
+      console.error("[scheduler/movimiento] Errores de validación:", transformacion.errores);
+      return { items: 0, error: transformacion.errores.join('; ') };
+    }
+
+    // Warnings (código_generico = 0, etc.)
+    if (transformacion.warnings.length > 0) {
+      console.warn("[scheduler/movimiento] Warnings:", transformacion.warnings);
+    }
 
     const res = await fetch(`http://${MIRTH_HOST}:6664/cenabast/movimiento`, {
       method: "POST",
@@ -281,13 +304,7 @@ async function ejecutarMovimiento(pool: any, tarea: any, token: string, tipo: "E
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        id_relacion: tarea.id_relacion || DEFAULT_ID_RELACION,
-        fecha_movimiento: fechaHoy,
-        tipo_movimiento: tipo,
-        tipo_compra: tarea.tipo_compra || "C",
-        movimiento_detalle: items,
-      }),
+      body: JSON.stringify(transformacion.data),
       signal: AbortSignal.timeout(30000),
     });
 

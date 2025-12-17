@@ -3,6 +3,7 @@ import { getPool, sql } from "@/lib/db";
 import { getValidToken } from "@/lib/cenabast-token";
 import { isValidDateFormat, toSqlDate, sanitizeSqlDate, getDateDiagnostic } from "@/lib/date-validator";
 import { parseMirthError, formatMirthErrorForLog } from "@/lib/mirth-error-handler";
+import { transformarMovimientoParaCenabast } from "@/lib/cenabast-transform";
 
 const MIRTH_HOST = process.env.MIRTH_HOST || "10.7.71.64";
 const MIRTH_PORT_MOVIMIENTO = 6664;
@@ -212,16 +213,17 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Preparar datos con sanitización de fechas
-    const movimientoData = {
+    // Preparar datos SIN transformar (para diagnóstico)
+    const movimientoDataRaw = {
       id_relacion: Number(id_relacion),
       fecha_movimiento: fechaSanitizada,
       tipo_movimiento,
       tipo_compra,
       movimiento_detalle: result.recordset.map((row: any) => {
-                // Sanitizar fecha_vencimiento (puede ser NULL)
+        // Sanitizar fecha_vencimiento (puede ser NULL)
         const fechaVencimiento = sanitizeSqlDate(row.fecha_vencimiento);
 
+        // Determinar tipo de documento
         const esGuia = row.tipoDocumento === "Guia Despacho";
 
         // Si había fecha pero es inválida, registrar warning
@@ -230,19 +232,49 @@ export async function POST(request: NextRequest) {
         }
 
         return {
-          codigo_interno: String(row.codigo_interno),
-          codigo_generico: Number(row.codigo_generico) || 0,
-          cantidad: Number(row.cantidad) || 0,
-          lote: row.lote || undefined,
-          fecha_vencimiento: fechaVencimiento, // undefined si es inválida
-          rut_proveedor: row.rut_proveedor ? String(row.rut_proveedor) : undefined,
-          nro_factura: !esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
-          nro_guia_despacho: esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
-          codigo_despacho: 0,
-          codigo_gtin: undefined,
+          codigo_interno: row.codigo_interno,
+          codigo_generico: row.codigo_generico,
+          cantidad: row.cantidad,
+          lote: row.lote,
+          fecha_vencimiento: fechaVencimiento,
+          rut_proveedor: row.rut_proveedor,
+          nro_doc: row.nro_doc,
+          nro_factura: !esGuia ? row.nro_doc : undefined,
+          nro_guia_despacho: esGuia ? row.nro_doc : undefined,
+          codigo_despacho: row.codigo_despacho,
+          codigo_gtin: row.codigo_gtin,
         };
       }),
     };
+
+    // TRANSFORMAR según especificación CENABAST v1.9
+    // Esto corrige:
+    // - codigo_generico: convierte a int (NO puede ser 0)
+    // - rut_proveedor: limpia DV y convierte a int (ej: "96519830-K" → 96519830)
+    // - nro_factura: convierte a int
+    // - nro_guia_despacho: convierte a int
+    // - codigo_despacho: omite si es 0
+    const transformacion = transformarMovimientoParaCenabast(movimientoDataRaw);
+
+    // Si hay errores críticos, no enviar
+    if (transformacion.errores.length > 0) {
+      console.error("[API] Errores de validación:", transformacion.errores);
+      return NextResponse.json({
+        success: false,
+        error: {
+          message: "Errores de validación en los datos",
+          errores: transformacion.errores,
+          warnings: transformacion.warnings,
+        }
+      }, { status: 400 });
+    }
+
+    // Mostrar warnings si los hay
+    if (transformacion.warnings.length > 0) {
+      console.warn("[API] Warnings de validación:", transformacion.warnings);
+    }
+
+    const movimientoData = transformacion.data;
 
     console.log("[API] Enviando a Mirth:", JSON.stringify(movimientoData, null, 2));
 
