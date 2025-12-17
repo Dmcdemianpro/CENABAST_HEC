@@ -103,7 +103,9 @@ export async function POST(request: NextRequest) {
       console.log("[API] Fecha válida con", checkResult.recordset[0].total, "registros");
     }
 
-    // SIN FILTROS según guía CENABAST v1.9 - Enviar TODO
+    // FILTROS APLICADOS (requeridos por normativa):
+    // 1. tipoDocumento IN ('Factura','Guia Despacho') - Solo documentos válidos para CENABAST
+    // 2. RUT <> '11-101' - Excluir movimientos internos del Hospital del Carmen
     const diagResult = await pool.request()
       .input("fecha", sql.Date, parseDateOnly(fechaUsada))
       .query(`
@@ -118,15 +120,18 @@ export async function POST(request: NextRequest) {
       `);
 
     const diag = diagResult.recordset[0] || { total: 0, permitidos_tipo: 0, excluidos_rut: 0, permitidos_final: 0 };
-    console.log("[API] Filtros aplicados:", JSON.stringify({
+    console.log("[API] Diagnóstico de filtros:", JSON.stringify({
       fecha: fechaUsada,
-      tipo: tipo_movimiento,
-      total: diag.total,
-      permitidos_por_tipo: diag.permitidos_tipo,
-      excluidos_por_rut: diag.excluidos_rut,
-      para_enviar: diag.permitidos_final,
-    }));
+      tipo: tipo_movimiento === "E" ? "Entrada" : "Salida",
+      total_movimientos: diag.total,
+      con_tipo_valido_factura_guia: diag.permitidos_tipo,
+      movimientos_internos_rut_11101: diag.excluidos_rut,
+      validos_para_enviar_cenabast: diag.permitidos_final,
+      nota: "Movimientos internos (RUT 11-101) NO se reportan a CENABAST"
+    }, null, 2));
 
+    // Query principal: obtener movimientos válidos para CENABAST
+    // IMPORTANTE: Los filtros son obligatorios por normativa
     const query = `
       SELECT
         ISNULL(m.codigo, '') AS codigo_interno,
@@ -141,7 +146,9 @@ export async function POST(request: NextRequest) {
       FROM TBL_movimientos_cenabast m
       WHERE ${tipo_movimiento === "E" ? "m.cantidad > 0" : "m.cantidad < 0"}
         AND CAST(m.fechaMovimiento AS DATE) = @fecha
+        -- Solo Factura o Guía de Despacho (requerimiento CENABAST)
         AND m.tipoDocumento IN ('Factura','Guia Despacho')
+        -- Excluir movimientos internos del Hospital del Carmen
         AND ISNULL(m.rut,'') <> '11-101'
     `;
 
@@ -152,10 +159,30 @@ export async function POST(request: NextRequest) {
     console.log("[API] Registros encontrados:", result.recordset.length);
 
     if (result.recordset.length === 0) {
+      // Mensaje más descriptivo indicando por qué no hay movimientos
+      const tipoDescripcion = tipo_movimiento === "E" ? "entradas" : "salidas";
+      let mensaje = `No hay movimientos de ${tipoDescripcion} para reportar a CENABAST en esta fecha`;
+
+      if (diag.excluidos_rut > 0) {
+        mensaje += `. Se encontraron ${diag.excluidos_rut} movimientos internos del hospital (RUT 11-101) que no se reportan a CENABAST`;
+      }
+
+      if (diag.total > 0 && diag.permitidos_tipo === 0) {
+        mensaje += `. Hay ${diag.total} movimientos pero no son de tipo Factura o Guía de Despacho`;
+      }
+
       return NextResponse.json({
         success: true,
-        message: "No hay movimientos para informar en esta fecha",
+        message: mensaje,
         count: 0,
+        diagnostico: {
+          total_movimientos: diag.total,
+          con_tipo_valido: diag.permitidos_tipo,
+          internos_excluidos: diag.excluidos_rut,
+          validos_para_enviar: diag.permitidos_final,
+          fecha_consultada: fechaUsada,
+          tipo_movimiento: tipo_movimiento === "E" ? "Entrada" : "Salida",
+        }
       });
     }
 
