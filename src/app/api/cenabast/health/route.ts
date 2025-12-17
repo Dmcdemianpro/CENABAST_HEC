@@ -14,21 +14,26 @@ const MIRTH_PORTS = {
   stock: 6663,
   movimiento: 6664,
 };
+const SOLICITANTE =
+  process.env.NEXT_PUBLIC_CENABAST_RUT ||
+  process.env.CENABAST_RUT_SOLICITANTE ||
+  "61980320";
 
 /**
  * Verificar si un puerto de Mirth responde
  */
-async function checkMirthPort(port: number): Promise<boolean> {
+async function checkMirthPort(port: number, testPath: string): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
-    
-    const res = await fetch(`http://${MIRTH_HOST}:${port}/health`, {
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const res = await fetch(`http://${MIRTH_HOST}:${port}${testPath}`, {
+      method: "GET",
       signal: controller.signal,
     });
     
     clearTimeout(timeoutId);
-    return res.ok;
+    return res.status < 500;
   } catch {
     return false;
   }
@@ -83,10 +88,10 @@ export async function GET() {
   // 3. Verificar canales Mirth (en paralelo con timeout corto)
   try {
     const checks = await Promise.all([
-      checkMirthPort(MIRTH_PORTS.auth),
-      checkMirthPort(MIRTH_PORTS.productos),
-      checkMirthPort(MIRTH_PORTS.stock),
-      checkMirthPort(MIRTH_PORTS.movimiento),
+      checkMirthPort(MIRTH_PORTS.auth, "/cenabast/auth"),
+      checkMirthPort(MIRTH_PORTS.productos, "/cenabast/productos/paginados?paginaActual=1&elementosPorPagina=1"),
+      checkMirthPort(MIRTH_PORTS.stock, `/cenabast/stock/consulta?solicitante=${SOLICITANTE}&mes=12&anio=2025`),
+      checkMirthPort(MIRTH_PORTS.movimiento, "/cenabast/movimiento"),
     ]);
     
     const mirthChannels = {

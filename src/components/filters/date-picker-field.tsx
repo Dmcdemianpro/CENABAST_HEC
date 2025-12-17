@@ -29,7 +29,8 @@ export function DatePickerField({
   className,
   clearable = true,
 }: Props) {
-  const date = value ? new Date(value) : undefined;
+  // Parseamos en hora local para evitar desfasajes de UTC (ej. mostrar 02/12 y enviar 03/12)
+  const date = value ? new Date(`${value}T00:00:00`) : undefined;
 
   return (
     <Popover>

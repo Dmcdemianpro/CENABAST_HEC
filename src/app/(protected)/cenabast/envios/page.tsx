@@ -151,7 +151,7 @@ function TareaDialog({
     tipo: tarea?.tipo || ("STOCK" as TipoTarea),
     hora_ejecucion: tarea?.hora_ejecucion || "08:00",
     dias_semana: tarea?.dias_semana || "1,2,3,4,5",
-    id_relacion: tarea?.id_relacion || 1,
+    id_relacion: tarea?.id_relacion || Number(process.env.NEXT_PUBLIC_CENABAST_ID_RELACION || 286),
     tipo_compra: tarea?.tipo_compra || ("C" as "C" | "M"),
     activo: tarea?.activo ?? true,
   });

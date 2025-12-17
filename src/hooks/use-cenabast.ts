@@ -51,14 +51,14 @@ export type InformarMovimientoParams = {
   tipo_compra: "C" | "M";
   detalles?: Array<{
     codigo_interno: string;
-    codigo_generico: string;
+    codigo_generico: number;
     cantidad: number;
     lote?: string;
     fecha_vencimiento?: string;
     rut_proveedor?: string;
     nro_factura?: string;
     nro_guia_despacho?: string;
-    codigo_despacho?: string | number;
+    codigo_despacho?: number;
   }>;
 };
 

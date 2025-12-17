@@ -4,10 +4,13 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getPool, sql } from "@/lib/db";
 import { getValidToken } from "@/lib/cenabast-token";
+import { toSqlDate, sanitizeSqlDate } from "@/lib/date-validator";
+import { parseMirthError, formatMirthErrorForLog } from "@/lib/mirth-error-handler";
 
 export const runtime = "nodejs";
 
 const MIRTH_HOST = process.env.MIRTH_HOST || "10.7.71.64";
+const DEFAULT_ID_RELACION = Number(process.env.CENABAST_ID_RELACION || 286);
 const CRON_SECRET = process.env.CRON_SECRET || "cenabast-cron-secret";
 
 // Crear tablas si no existen
@@ -86,16 +89,20 @@ function calcularProximaEjecucion(hora: string, diasSemana: string): Date {
  */
 async function ejecutarStock(pool: any, tarea: any, token: string): Promise<{ items: number; error?: string }> {
   try {
-    // Obtener stock consolidado
+    // Obtener stock consolidado - SIN FILTROS según guía CENABAST v1.9
     const stockResult = await pool.request()
-      .input("idRelacion", sql.Int, tarea.id_relacion || 1)
+      .input("idRelacion", sql.Int, tarea.id_relacion || DEFAULT_ID_RELACION)
       .query(`
-        SELECT 
-          codigo,
-          SUM(stock_actual) AS cantidad
-        FROM TBL_existencias_cenabast
-        WHERE activo = 1
-        GROUP BY codigo
+        SELECT
+          ISNULL(e.codigo, '') AS codigo_interno,
+          ISNULL(TRY_CAST(e.codigo_zgen AS INT), 0) AS codigo_generico,
+          SUM(e.existencia) AS cantidad_stock,
+          0 AS codigo_despacho,
+          MAX(e.descripcion) AS descripcion_producto
+        FROM TBL_existencias_cenabast e
+        WHERE e.fechaCorte = (SELECT MAX(fechaCorte) FROM TBL_existencias_cenabast)
+        GROUP BY e.codigo, e.codigo_zgen
+        HAVING SUM(e.existencia) > 0
       `);
 
     if (stockResult.recordset.length === 0) {
@@ -103,9 +110,18 @@ async function ejecutarStock(pool: any, tarea: any, token: string): Promise<{ it
     }
 
     const items = stockResult.recordset.map((row: any) => ({
-      codigoProducto: row.codigo,
-      cantidad: row.cantidad,
+      codigo_interno: row.codigo_interno,
+      codigo_generico: Number(row.codigo_generico) || 0,
+      cantidad_stock: Number(row.cantidad_stock) || 0,
+      codigo_despacho: 0,
+      descripcion_producto: row.descripcion_producto || "",
     }));
+
+    // Obtener y validar fecha
+    const fechaHoy = toSqlDate(new Date());
+    if (!fechaHoy) {
+      return { items: 0, error: "Error generando fecha actual válida" };
+    }
 
     // Enviar a Mirth
     const res = await fetch(`http://${MIRTH_HOST}:6663/cenabast/stock/informar`, {
@@ -115,15 +131,26 @@ async function ejecutarStock(pool: any, tarea: any, token: string): Promise<{ it
         "Authorization": `Bearer ${token}`,
       },
       body: JSON.stringify({
-        idRelacion: tarea.id_relacion || 1,
-        items,
+        id_relacion: tarea.id_relacion || DEFAULT_ID_RELACION,
+        fecha_stock: fechaHoy,
+        stock_detalle: items,
       }),
       signal: AbortSignal.timeout(30000),
     });
 
+    const responseData = await res.json().catch(() => ({}));
+
+    // Verificar si el payload indica error interno
+    if (responseData?.statusCode && !responseData?.isSuccessful) {
+      const parsedError = parseMirthError(responseData);
+      console.error("[scheduler/stock] Error en respuesta:", formatMirthErrorForLog(parsedError));
+      return { items: items.length, error: parsedError.mensaje };
+    }
+
     if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      return { items: items.length, error: errorData?.error || `Error HTTP ${res.status}` };
+      const parsedError = parseMirthError(responseData);
+      console.error("[scheduler/stock] Error HTTP:", formatMirthErrorForLog(parsedError));
+      return { items: items.length, error: parsedError.mensaje || `Error HTTP ${res.status}` };
     }
 
     return { items: items.length };
@@ -139,57 +166,128 @@ async function ejecutarMovimiento(pool: any, tarea: any, token: string, tipo: "E
   try {
     const hoy = new Date().toISOString().split("T")[0];
     
-    const movResult = await pool.request()
+    // SIN FILTROS según guía CENABAST v1.9 - Enviar TODO
+    const diagResult = await pool.request()
       .input("tipo", sql.Char(1), tipo)
       .input("fecha", sql.Date, hoy)
       .query(`
-        SELECT *
+        SELECT
+          total = COUNT(*),
+          permitidos_tipo = SUM(CASE WHEN tipoDocumento IN ('Factura','Guia Despacho') THEN 1 ELSE 0 END),
+          excluidos_rut = SUM(CASE WHEN ISNULL(rut,'') = '11-101' THEN 1 ELSE 0 END),
+          permitidos_final = SUM(CASE WHEN tipoDocumento IN ('Factura','Guia Despacho') AND ISNULL(rut,'') <> '11-101' THEN 1 ELSE 0 END)
         FROM TBL_movimientos_cenabast
-        WHERE tipo_movimiento = @tipo
+        WHERE ${tipo === "E" ? "cantidad > 0" : "cantidad < 0"}
           AND CAST(fechaMovimiento AS DATE) = @fecha
-          AND enviado_cenabast = 0
+      `);
+
+    const diag = diagResult.recordset[0] || { total: 0, permitidos_tipo: 0, excluidos_rut: 0, permitidos_final: 0 };
+    console.log("[scheduler/movimiento] Filtros aplicados:", JSON.stringify({
+      fecha: hoy,
+      tipo,
+      total: diag.total,
+      permitidos_por_tipo: diag.permitidos_tipo,
+      excluidos_por_rut: diag.excluidos_rut,
+      para_enviar: diag.permitidos_final,
+    }));
+
+    const movResult = await pool.request()
+      .input("tipo", sql.Char(1), tipo)
+      .input("fecha", sql.Date, hoy)
+      .query(tipo === "E" ? `
+        SELECT
+          ISNULL(m.codigo, '') AS codigo_interno,
+          ISNULL(TRY_CAST(m.codigo_zgen AS INT), 0) AS codigo_generico,
+          m.cantidad AS cantidad,
+          m.numero_lote AS lote,
+          CONVERT(VARCHAR(10), m.vencimiento, 23) AS fecha_vencimiento,
+          m.tipoDocumento,
+          m.numero AS nro_doc,
+          m.rut AS rut_proveedor,
+          0 AS codigo_despacho
+        FROM TBL_movimientos_cenabast m
+        WHERE m.cantidad > 0
+          AND CAST(m.fechaMovimiento AS DATE) = @fecha
+          AND m.tipoDocumento IN ('Factura','Guia Despacho')
+          AND ISNULL(m.rut,'') <> '11-101'
+      ` : `
+        SELECT
+          ISNULL(m.codigo, '') AS codigo_interno,
+          ISNULL(TRY_CAST(m.codigo_zgen AS INT), 0) AS codigo_generico,
+          ABS(m.cantidad) AS cantidad,
+          m.numero_lote AS lote,
+          CONVERT(VARCHAR(10), m.vencimiento, 23) AS fecha_vencimiento,
+          m.tipoDocumento,
+          m.numero AS nro_doc,
+          m.rut AS rut_proveedor,
+          0 AS codigo_despacho
+        FROM TBL_movimientos_cenabast m
+        WHERE m.cantidad < 0
+          AND CAST(m.fechaMovimiento AS DATE) = @fecha
+          AND m.tipoDocumento IN ('Factura','Guia Despacho')
+          AND ISNULL(m.rut,'') <> '11-101'
       `);
 
     if (movResult.recordset.length === 0) {
       return { items: 0, error: "No hay movimientos pendientes" };
     }
 
-    const items = movResult.recordset.map((row: any) => ({
-      codigoProducto: row.codigo,
-      cantidad: row.cantidad,
-      lote: row.lote,
-      fechaVencimiento: row.fechaVencimiento,
-      tipoCompra: tarea.tipo_compra || "C",
-    }));
+    // Validar y sanitizar fecha
+    const fechaHoy = toSqlDate(hoy);
+    if (!fechaHoy) {
+      return { items: 0, error: "Error generando fecha válida" };
+    }
 
-    const endpoint = tipo === "E" ? "entrada" : "salida";
-    const res = await fetch(`http://${MIRTH_HOST}:6664/cenabast/movimiento/${endpoint}`, {
+    const items = movResult.recordset.map((row: any) => {
+      // Sanitizar fecha_vencimiento
+      const fechaVencimiento = sanitizeSqlDate(row.fecha_vencimiento);
+
+      const esGuia = row.tipoDocumento === "Guia Despacho";
+
+      return {
+        codigo_interno: row.codigo_interno,
+        codigo_generico: Number(row.codigo_generico) || 0,
+        cantidad: Number(row.cantidad) || 0,
+        lote: row.lote || undefined,
+        fecha_vencimiento: fechaVencimiento,
+        rut_proveedor: row.rut_proveedor ? String(row.rut_proveedor) : undefined,
+        nro_factura: !esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
+        nro_guia_despacho: esGuia && row.nro_doc ? String(row.nro_doc) : undefined,
+        codigo_despacho: row.codigo_despacho != null ? Number(row.codigo_despacho) : 0,
+        codigo_gtin: undefined,
+      };
+    });
+
+    const res = await fetch(`http://${MIRTH_HOST}:6664/cenabast/movimiento`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`,
       },
       body: JSON.stringify({
-        idRelacion: tarea.id_relacion || 1,
-        items,
+        id_relacion: tarea.id_relacion || DEFAULT_ID_RELACION,
+        fecha_movimiento: fechaHoy,
+        tipo_movimiento: tipo,
+        tipo_compra: tarea.tipo_compra || "C",
+        movimiento_detalle: items,
       }),
       signal: AbortSignal.timeout(30000),
     });
 
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      return { items: items.length, error: errorData?.error || `Error HTTP ${res.status}` };
+    const responseData = await res.json().catch(() => ({}));
+
+    // Verificar si el payload indica error interno
+    if (responseData?.statusCode && !responseData?.isSuccessful) {
+      const parsedError = parseMirthError(responseData);
+      console.error("[scheduler/movimiento] Error en respuesta:", formatMirthErrorForLog(parsedError));
+      return { items: items.length, error: parsedError.mensaje };
     }
 
-    // Marcar como enviados
-    await pool.request()
-      .input("tipo", sql.Char(1), tipo)
-      .input("fecha", sql.Date, hoy)
-      .query(`
-        UPDATE TBL_movimientos_cenabast 
-        SET enviado_cenabast = 1, fecha_envio = GETDATE()
-        WHERE tipo_movimiento = @tipo AND CAST(fechaMovimiento AS DATE) = @fecha
-      `);
+    if (!res.ok) {
+      const parsedError = parseMirthError(responseData);
+      console.error("[scheduler/movimiento] Error HTTP:", formatMirthErrorForLog(parsedError));
+      return { items: items.length, error: parsedError.mensaje || `Error HTTP ${res.status}` };
+    }
 
     return { items: items.length };
   } catch (err: any) {
@@ -226,7 +324,7 @@ async function ejecutarReglas(pool: any, tarea: any, token: string): Promise<{ i
         "Authorization": `Bearer ${token}`,
       },
       body: JSON.stringify({
-        idRelacion: tarea.id_relacion || 1,
+        idRelacion: tarea.id_relacion || DEFAULT_ID_RELACION,
         reglas: items,
       }),
       signal: AbortSignal.timeout(30000),
@@ -405,7 +503,7 @@ export async function POST(req: Request) {
         id: null,
         nombre: "Ejecución manual",
         tipo,
-        id_relacion: id_relacion || 1,
+        id_relacion: id_relacion || DEFAULT_ID_RELACION,
         tipo_compra: tipo_compra || "C",
         hora_ejecucion: "00:00",
         dias_semana: "1,2,3,4,5,6,7",

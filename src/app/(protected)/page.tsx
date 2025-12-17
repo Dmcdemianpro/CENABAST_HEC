@@ -5,6 +5,8 @@ import { useState } from "react";
 import { useAnalytics } from "@/hooks/use-analytics";
 import { Card, CardContent } from "@/components/ui/card";
 import { TopRotacionBar } from "@/components/charts/top-rotacion-bar";
+import { CenabastStatusWidget } from "@/components/widgets/cenabast-status-widget";
+import { StockCenabastWidget } from "@/components/widgets/stock-cenabast-widget";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, Package2, ArrowUpDown, Sparkles } from "lucide-react";
 
@@ -15,10 +17,12 @@ export default function HomePage() {
   const k = data?.kpis;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Filtros */}
       <GlobalFilters value={filters} onChange={setFilters} />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* KPIs principales - 4 columnas */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         {isLoading ? (
           [...Array(4)].map((_, i) => (
             <Skeleton key={i} className="h-28 rounded-2xl bg-white" />
@@ -33,38 +37,53 @@ export default function HomePage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <Card className="rounded-2xl bg-gradient-to-br from-sky-50 via-white to-indigo-50 border-slate-200 shadow-lg shadow-sky-100/60">
-          <CardContent className="p-4">
-            <div className="mb-2 font-semibold text-slate-900">
-              Top 10 rotación
-            </div>
-            <TopRotacionBar
-              data={data?.topRotacion ?? []}
-              loading={isLoading}
-            />
-          </CardContent>
-        </Card>
+      {/* Grid principal - 2 columnas en desktop */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* Columna izquierda - Widgets verticales */}
+        <div className="space-y-6">
+          {/* Top 10 Rotación */}
+          <Card className="rounded-2xl bg-gradient-to-br from-sky-50 via-white to-indigo-50 border-slate-200 shadow-lg shadow-sky-100/60">
+            <CardContent className="p-5">
+              <div className="mb-3 font-semibold text-slate-900 text-base">
+                📊 Top 10 rotación
+              </div>
+              <TopRotacionBar
+                data={data?.topRotacion ?? []}
+                loading={isLoading}
+              />
+            </CardContent>
+          </Card>
 
-        <Card className="rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 border-emerald-100 shadow-lg shadow-emerald-100/70 xl:col-span-2">
-          <CardContent className="p-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-emerald-700 font-semibold">Salud del sistema</p>
-                <p className="text-xs text-emerald-600">Balance rápido de existencias y movimientos</p>
+          {/* Salud del Sistema */}
+          <Card className="rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 border-emerald-100 shadow-lg shadow-emerald-100/70">
+            <CardContent className="p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-base text-emerald-700 font-semibold">💚 Salud del sistema</p>
+                  <p className="text-xs text-emerald-600">Balance de existencias y movimientos</p>
+                </div>
+                <div className="h-12 w-12 rounded-full bg-white/70 flex items-center justify-center text-emerald-600 font-semibold text-lg">
+                  {(k?.movimientos_total ?? 0).toLocaleString("es-CL")}
+                </div>
               </div>
-              <div className="h-10 w-10 rounded-full bg-white/70 flex items-center justify-center text-emerald-600 font-semibold">
-                {(k?.movimientos_total ?? 0).toLocaleString("es-CL")}
+              <div className="grid grid-cols-2 gap-3">
+                <Metric label="Existencias" value={k?.existencias_total ?? 0} tone="emerald" />
+                <Metric label="Mov. hoy" value={k?.movimientos_hoy ?? 0} tone="sky" />
+                <Metric label="Stock crítico" value={k?.stock_critico_count ?? 0} tone="rose" />
+                <Metric label="Bajo mínimo" value={k?.stock_minimo_count ?? 0} tone="amber" />
               </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-slate-700">
-              <Metric label="Existencias" value={k?.existencias_total ?? 0} tone="emerald" />
-              <Metric label="Mov. hoy" value={k?.movimientos_hoy ?? 0} tone="sky" />
-              <Metric label="Stock crítico" value={k?.stock_critico_count ?? 0} tone="rose" />
-              <Metric label="Bajo mínimo" value={k?.stock_minimo_count ?? 0} tone="amber" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Columna derecha - Widgets de CENABAST */}
+        <div className="space-y-6">
+          {/* Estado de Envíos CENABAST */}
+          <CenabastStatusWidget />
+
+          {/* Consulta de Stock CENABAST */}
+          <StockCenabastWidget />
+        </div>
       </div>
     </div>
   );

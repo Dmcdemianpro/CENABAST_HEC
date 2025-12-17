@@ -1,194 +1,367 @@
 // src/app/api/cenabast/stock/informar/route.ts
-// Informar stock consolidado a CENABAST vía Mirth (v1.9)
-
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getPool, sql } from "@/lib/db";
-import { mirthInformarStock, type StockDetalle } from "@/lib/mirth";
-import { getValidToken } from "@/lib/cenabast-token";
+import { isValidDateFormat, toSqlDate, getDateDiagnostic } from "@/lib/date-validator";
+import { parseMirthError, formatMirthErrorForUser, formatMirthErrorForLog } from "@/lib/mirth-error-handler";
 
 export const runtime = "nodejs";
 
-// Validación del payload
+let getPool: any, sql: any, mirthInformarStock: any, getValidToken: any;
+
+try {
+  const dbModule = require("@/lib/db");
+  getPool = dbModule.getPool;
+  sql = dbModule.sql;
+} catch (e) {
+  console.error("[stock/informar] Error importando @/lib/db:", e);
+}
+
+try {
+  const mirthModule = require("@/lib/mirth");
+  mirthInformarStock = mirthModule.mirthInformarStock;
+} catch (e) {
+  console.error("[stock/informar] Error importando @/lib/mirth:", e);
+}
+
+try {
+  const tokenModule = require("@/lib/cenabast-token");
+  getValidToken = tokenModule.getValidToken;
+} catch (e) {
+  console.error("[stock/informar] Error importando @/lib/cenabast-token:", e);
+}
+
 const informarStockSchema = z.object({
-  fecha_stock: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato: YYYY-MM-DD"),
+  fecha_stock: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato: YYYY-MM-DD").optional(),
   id_relacion: z.number().int().positive(),
-  // Si no se envían productos, se toman de la BD
-  productos: z
-    .array(
-      z.object({
-        codigo_interno: z.string(),
-        codigo_generico: z.union([z.string(), z.number()]),
-        cantidad_stock: z.number().int().min(0),
-        codigo_despacho: z.union([z.string(), z.number()]).optional(),
-        codigo_gtin: z.string().optional(),
-        codigo_interno_despacho: z.string().optional(),
-        rut_proveedor: z.string().optional(),
-        descripcion_producto: z.string().optional(),
-        descripcion_marca_comercial: z.string().optional(),
-        pedido_compra_cenabast: z.string().optional(),
-      })
-    )
-    .optional(),
+  productos: z.array(z.object({
+    codigo_interno: z.string(),
+    codigo_generico: z.union([z.string(), z.number()]),
+    cantidad_stock: z.number().int().min(0),
+    codigo_despacho: z.union([z.string(), z.number()]).optional(),
+    descripcion_producto: z.string().optional(),
+  })).optional(),
 });
 
-/**
- * POST /api/cenabast/stock/informar
- *
- * Envía el stock actual a CENABAST. Si no se envían productos,
- * los obtiene automáticamente de TBL_existencias_cenabast.
- */
+function parseDateOnly(dateStr: string) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return new Date(dateStr);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 export async function POST(req: Request) {
+  console.log("[stock/informar] POST - Iniciando");
+  
+  if (!getPool || !sql) {
+    return NextResponse.json(
+      { success: false, error: { message: "Módulo db no disponible" } },
+      { status: 500 }
+    );
+  }
+  
+  if (!mirthInformarStock) {
+    return NextResponse.json(
+      { success: false, error: { message: "Módulo mirth no disponible" } },
+      { status: 500 }
+    );
+  }
+  
+  if (!getValidToken) {
+    return NextResponse.json(
+      { success: false, error: { message: "Módulo token no disponible" } },
+      { status: 500 }
+    );
+  }
+
   try {
     const body = await req.json();
+    console.log("[stock/informar] Body recibido:", JSON.stringify(body, null, 2));
+    
     const parsed = informarStockSchema.safeParse(body);
 
     if (!parsed.success) {
       return NextResponse.json(
-        { error: { message: "Datos inválidos", details: parsed.error.flatten() } },
+        { success: false, error: { message: "Datos inválidos", details: parsed.error.flatten() } },
         { status: 400 }
       );
     }
 
-    const { fecha_stock, id_relacion, productos } = parsed.data;
+    let { fecha_stock, id_relacion, productos } = parsed.data;
 
-    // Obtener token directamente desde Mirth
-    const tokenInfo = await getValidToken();
-    if (!tokenInfo) {
+    // Obtener token
+    console.log("[stock/informar] Obteniendo token...");
+    const tokenResult = await getValidToken();
+    
+    let token: string;
+    if (typeof tokenResult === 'string') {
+      token = tokenResult;
+    } else if (tokenResult && typeof tokenResult === 'object' && tokenResult.token) {
+      token = tokenResult.token;
+    } else {
       return NextResponse.json(
-        { error: { message: "No se pudo obtener token desde Mirth" } },
+        { success: false, error: { message: "No se pudo obtener token" } },
         { status: 502 }
       );
     }
-    const token = tokenInfo.token;
+    
+    console.log("[stock/informar] Token obtenido (length):", token.length);
 
-    let stockDetalle: StockDetalle[];
+    let stockDetalle: any[];
+    let fechaUsada: string;
 
     if (productos && productos.length > 0) {
-      stockDetalle = productos;
+      console.log("[stock/informar] Usando productos del request:", productos.length);
+      fechaUsada = fecha_stock || new Date().toISOString().split('T')[0];
+      stockDetalle = productos.map((p) => ({
+        codigo_interno: String(p.codigo_interno),
+        codigo_generico: Number(p.codigo_generico) || 0,
+        cantidad_stock: Number(p.cantidad_stock) || 0,
+        codigo_despacho: p.codigo_despacho != null ? Number(p.codigo_despacho) : 0,
+        descripcion_producto: p.descripcion_producto || "",
+      }));
     } else {
-      // Obtener desde BD y mapear a estructura v1.9
+      // Obtener desde BD
       const pool = await getPool();
+      
+      // Si se especificó fecha, verificar si tiene datos
+      if (fecha_stock) {
+        console.log("[stock/informar] Verificando datos para fecha:", fecha_stock);
+        const fechaCheck = await pool.request()
+          .input("fecha", sql.Date, parseDateOnly(fecha_stock))
+          .query(`
+            SELECT COUNT(*) AS total 
+            FROM TBL_existencias_cenabast 
+            WHERE fechaCorte = @fecha AND existencia > 0
+          `);
+        
+        if (fechaCheck.recordset[0].total > 0) {
+          fechaUsada = fecha_stock;
+          console.log("[stock/informar] Fecha válida con", fechaCheck.recordset[0].total, "registros");
+        } else {
+          console.log("[stock/informar] No hay datos para", fecha_stock);
+          fecha_stock = undefined; // Forzar usar última fecha
+        }
+      }
+      
+      // Si no hay fecha o no tiene datos, usar la última disponible
+      if (!fecha_stock) {
+        console.log("[stock/informar] Buscando última fecha con datos...");
+        const ultimaFecha = await pool.request().query(`
+          SELECT TOP 1 
+            CONVERT(VARCHAR(10), fechaCorte, 23) AS fechaCorte,
+            COUNT(*) AS registros
+          FROM TBL_existencias_cenabast 
+          WHERE existencia > 0
+          GROUP BY fechaCorte
+          ORDER BY fechaCorte DESC
+        `);
+        
+        if (ultimaFecha.recordset.length === 0) {
+          return NextResponse.json({
+            success: false,
+            error: { message: "No hay existencias en la base de datos" },
+            sugerencia: "Verifique que TBL_existencias_cenabast tenga datos con existencia > 0"
+          }, { status: 404 });
+        }
+        
+        fechaUsada = ultimaFecha.recordset[0].fechaCorte;
+        console.log("[stock/informar] Usando última fecha:", fechaUsada, "con", ultimaFecha.recordset[0].registros, "registros");
+      } else {
+        fechaUsada = fecha_stock;
+      }
+      
+      // Obtener productos - SIN FILTROS según guía CENABAST v1.9
+      // Se envía TODO, incluso con codigo_zgen NULL o no numérico
+      // Usar ISNULL para valores por defecto en lugar de filtrar
       const result = await pool.request()
-        .input("fecha", sql.Date, new Date(fecha_stock))
+        .input("fecha", sql.Date, parseDateOnly(fechaUsada))
         .query(`
-          SELECT 
-            e.codigo AS codigo_interno,
-            COALESCE(e.codigo_zgen, e.codigo) AS codigo_generico,
+          SELECT
+            ISNULL(e.codigo, '') AS codigo_interno,
+            ISNULL(TRY_CAST(NULLIF(LTRIM(RTRIM(e.codigo_zgen)), '') AS INT), 0) AS codigo_generico,
             SUM(e.existencia) AS cantidad_stock,
             MAX(e.descripcion) AS descripcion_producto
-          FROM dbCenabast.dbo.TBL_existencias_cenabast e
+          FROM TBL_existencias_cenabast e
           WHERE e.fechaCorte = @fecha
-            AND e.codigo IS NOT NULL
+            AND e.existencia > 0
           GROUP BY e.codigo, e.codigo_zgen
-          HAVING SUM(e.existencia) > 0
         `);
 
+      console.log("[stock/informar] Productos encontrados:", result.recordset.length);
+
       if (result.recordset.length === 0) {
-        return NextResponse.json(
-          { error: { message: `No hay existencias para la fecha ${fecha_stock}` } },
-          { status: 404 }
-        );
+        // Mostrar info de diagnóstico
+        const diagnostico = await pool.request().query(`
+          SELECT 
+            COUNT(*) AS total_registros,
+            COUNT(DISTINCT fechaCorte) AS fechas_distintas,
+            MIN(fechaCorte) AS fecha_min,
+            MAX(fechaCorte) AS fecha_max,
+            SUM(CASE WHEN existencia > 0 THEN 1 ELSE 0 END) AS con_stock
+          FROM TBL_existencias_cenabast
+        `);
+        
+        return NextResponse.json({
+          success: false,
+          error: { message: "No hay productos con stock > 0" },
+          diagnostico: diagnostico.recordset[0]
+        }, { status: 404 });
       }
 
-      stockDetalle = result.recordset.map((r) => ({
-        codigo_interno: r.codigo_interno,
-        codigo_generico: r.codigo_generico,
-        cantidad_stock: r.cantidad_stock,
+      stockDetalle = result.recordset.map((r: any) => ({
+        codigo_interno: String(r.codigo_interno),
+        codigo_generico: Number(r.codigo_generico) || 0,
+        cantidad_stock: Number(r.cantidad_stock) || 0,
         codigo_despacho: 0,
-        codigo_gtin: "",
-        codigo_interno_despacho: "",
-        rut_proveedor: "",
         descripcion_producto: r.descripcion_producto || "",
-        descripcion_marca_comercial: "",
-        pedido_compra_cenabast: "",
       }));
     }
 
-    // Llamar a Mirth para enviar a CENABAST
+    // Validar fecha antes de enviar
+    if (!isValidDateFormat(fechaUsada)) {
+      const diagnostic = getDateDiagnostic(fechaUsada);
+      console.error("[stock/informar] Fecha inválida:", diagnostic);
+
+      return NextResponse.json({
+        success: false,
+        error: {
+          message: "Fecha de stock inválida",
+          details: diagnostic,
+        }
+      }, { status: 400 });
+    }
+
+    // Sanitizar fecha para asegurar formato correcto
+    const fechaSanitizada = toSqlDate(fechaUsada);
+    if (!fechaSanitizada) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          message: "No se pudo convertir la fecha a formato SQL válido",
+          fecha_original: fechaUsada,
+        }
+      }, { status: 400 });
+    }
+
+    // Enviar a Mirth
+    console.log("[stock/informar] Enviando", stockDetalle.length, "productos a Mirth...");
+    console.log("[stock/informar] Fecha sanitizada:", fechaSanitizada);
+
     const mirthResult = await mirthInformarStock(token, {
       id_relacion,
-      fecha_stock,
+      fecha_stock: fechaSanitizada,
       stock_detalle: stockDetalle,
     });
 
-    if (!mirthResult.success) {
-      const pool = await getPool();
-      await pool.request()
-        .input("accion", sql.VarChar(50), "INFORMAR_STOCK_ERROR")
-        .input("detalle", sql.VarChar(500), mirthResult.error)
-        .query(`
-          INSERT INTO dbCenabast.dbo.TBL_auditoria(usuario, accion, detalle)
-          VALUES ('system', @accion, @detalle)
-        `);
+    console.log("[stock/informar] Respuesta de Mirth:", mirthResult);
 
-      return NextResponse.json(
-        { error: { message: mirthResult.error || "Error enviando stock a CENABAST" } },
-        { status: 500 }
-      );
+    // Manejar errores de Mirth con parser especializado
+    if (!mirthResult.success) {
+      const parsedError = parseMirthError(mirthResult.data || mirthResult);
+      console.error("[stock/informar] Error parseado:", formatMirthErrorForLog(parsedError));
+
+      return NextResponse.json({
+        success: false,
+        error: {
+          tipo: parsedError.tipo,
+          message: parsedError.mensaje,
+          detalles: parsedError.detalles,
+          sugerencias: parsedError.sugerencias,
+          esRecuperable: parsedError.esRecuperable,
+        }
+      }, { status: mirthResult.statusCode || 500 });
     }
 
-    // Auditoría OK
-    const pool = await getPool();
-    await pool.request()
-      .input("accion", sql.VarChar(50), "INFORMAR_STOCK_OK")
-      .input("detalle", sql.VarChar(500), `fecha=${fecha_stock}, productos=${stockDetalle.length}`)
-      .query(`
-        INSERT INTO dbCenabast.dbo.TBL_auditoria(usuario, accion, detalle)
-        VALUES ('system', @accion, @detalle)
-      `);
+    // Si Mirth responde con success pero el payload indica error
+    if (mirthResult.data?.statusCode && !mirthResult.data?.isSuccessful) {
+      const parsedError = parseMirthError(mirthResult.data);
+      console.error("[stock/informar] Error en respuesta exitosa:", formatMirthErrorForLog(parsedError));
+
+      return NextResponse.json({
+        success: false,
+        error: {
+          tipo: parsedError.tipo,
+          message: parsedError.mensaje,
+          detalles: parsedError.detalles,
+          sugerencias: parsedError.sugerencias,
+          esRecuperable: parsedError.esRecuperable,
+        },
+        response: mirthResult.data,
+      }, { status: mirthResult.data.statusCode || 500 });
+    }
 
     return NextResponse.json({
+      success: true,
       ok: true,
-      fecha_stock,
+      fecha_stock: fechaUsada,
       productos_enviados: stockDetalle.length,
-      response: mirthResult.data,
+      response: mirthResult.data || mirthResult,
     });
+    
   } catch (err: any) {
+    console.error("[stock/informar] Error:", err);
     return NextResponse.json(
-      { error: { message: err.message } },
+      { success: false, error: { message: err.message } },
       { status: 500 }
     );
   }
 }
 
-/**
- * GET /api/cenabast/stock/informar
- *
- * Preview: muestra qué se enviaría sin enviarlo
- */
 export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const fecha = searchParams.get("fecha") || new Date().toISOString().slice(0, 10);
+  console.log("[stock/informar] GET - Preview/Diagnóstico");
+  
+  if (!getPool || !sql) {
+    return NextResponse.json(
+      { success: false, error: { message: "Módulo db no disponible" } },
+      { status: 500 }
+    );
+  }
 
+  try {
     const pool = await getPool();
-    const result = await pool.request()
-      .input("fecha", sql.Date, new Date(fecha))
-      .query(`
-        SELECT 
-          e.codigo AS codigo_interno,
-          COALESCE(e.codigo_zgen, e.codigo) AS codigo_generico,
-          SUM(e.existencia) AS cantidad_stock,
-          MAX(e.descripcion) AS descripcion_producto,
-          COUNT(DISTINCT e.bodega) AS bodegas
-        FROM dbCenabast.dbo.TBL_existencias_cenabast e
-        WHERE e.fechaCorte = @fecha
-          AND e.codigo IS NOT NULL
-        GROUP BY e.codigo, e.codigo_zgen
-        HAVING SUM(e.existencia) > 0
-        ORDER BY e.codigo
-      `);
+    
+    // Diagnóstico de la tabla
+    const diagnostico = await pool.request().query(`
+      SELECT 
+        COUNT(*) AS total_registros,
+        COUNT(DISTINCT fechaCorte) AS fechas_distintas,
+        CONVERT(VARCHAR(10), MIN(fechaCorte), 23) AS fecha_min,
+        CONVERT(VARCHAR(10), MAX(fechaCorte), 23) AS fecha_max,
+        SUM(CASE WHEN existencia > 0 THEN 1 ELSE 0 END) AS registros_con_stock,
+        SUM(existencia) AS stock_total
+      FROM TBL_existencias_cenabast
+    `);
+    
+    // Últimas 5 fechas con datos
+    const fechas = await pool.request().query(`
+      SELECT TOP 5
+        CONVERT(VARCHAR(10), fechaCorte, 23) AS fecha,
+        COUNT(*) AS productos,
+        SUM(existencia) AS stock_total
+      FROM TBL_existencias_cenabast
+      WHERE existencia > 0
+      GROUP BY fechaCorte
+      ORDER BY fechaCorte DESC
+    `);
 
     return NextResponse.json({
-      fecha,
-      total_productos: result.recordset.length,
-      preview: result.recordset.slice(0, 20),
-      message: "Use POST para enviar a CENABAST",
+      success: true,
+      tabla: "TBL_existencias_cenabast",
+      diagnostico: diagnostico.recordset[0],
+      ultimas_fechas: fechas.recordset,
+      uso: {
+        POST: {
+          url: "/api/cenabast/stock/informar",
+          body: {
+            id_relacion: 1,
+            fecha_stock: "YYYY-MM-DD (opcional, usa última fecha si no se envía)"
+          }
+        }
+      }
     });
   } catch (err: any) {
+    console.error("[stock/informar] GET Error:", err);
     return NextResponse.json(
-      { error: { message: err.message } },
+      { success: false, error: { message: err.message } },
       { status: 500 }
     );
   }

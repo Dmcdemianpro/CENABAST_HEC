@@ -93,10 +93,10 @@ async function callMirth<T = any>(
 // ============================================================
 
 export async function mirthAuth(credentials: {
-  usuario: string;
-  clave: string;
+  user: string;
+  password: string;
 }): Promise<MirthResponse<{ token: string; expires_in: number }>> {
-  return callMirth(MIRTH_CONFIG.ports.auth, "/cenabast/auth/login", {
+  return callMirth(MIRTH_CONFIG.ports.auth, "/cenabast/auth", {
     method: "POST",
     body: credentials,
   });
@@ -105,7 +105,7 @@ export async function mirthAuth(credentials: {
 export async function mirthRefreshToken(
   token: string
 ): Promise<MirthResponse<{ token: string }>> {
-  return callMirth(MIRTH_CONFIG.ports.auth, "/cenabast/auth/refresh", {
+  return callMirth(MIRTH_CONFIG.ports.auth, "/cenabast/auth", {
     method: "POST",
     token,
   });
@@ -115,25 +115,59 @@ export async function mirthRefreshToken(
 // CANAL 002 - PRODUCTOS
 // ============================================================
 
-export async function mirthGetProductos(
+export async function mirthGetProductosPaginados(
   token: string,
-  params?: { page?: number; size?: number }
+  params?: { paginaActual?: number; elementosPorPagina?: number }
 ): Promise<MirthResponse<any[]>> {
   const qs = new URLSearchParams();
-  if (params?.page) qs.set("page", String(params.page));
-  if (params?.size) qs.set("size", String(params.size));
+  if (params?.paginaActual) qs.set("paginaActual", String(params.paginaActual));
+  if (params?.elementosPorPagina)
+    qs.set("elementosPorPagina", String(params.elementosPorPagina));
 
-  const path = `/cenabast/productos${qs.toString() ? `?${qs}` : ""}`;
+  const path = `/cenabast/productos/paginados${
+    qs.toString() ? `?${qs}` : ""
+  }`;
   return callMirth(MIRTH_CONFIG.ports.productos, path, { token });
 }
 
-export async function mirthGetProductoById(
+export async function mirthBuscarProductoPorNombre(
   token: string,
-  id: string
+  nombre_producto: string
 ): Promise<MirthResponse<any>> {
-  return callMirth(MIRTH_CONFIG.ports.productos, `/cenabast/productos/${id}`, {
-    token,
+  const qs = new URLSearchParams({
+    nombre_producto,
   });
+  return callMirth(
+    MIRTH_CONFIG.ports.productos,
+    `/cenabast/producto?${qs.toString()}`,
+    { token }
+  );
+}
+
+export async function mirthBuscarProductoPorCodigo(
+  token: string,
+  codigo_producto: string | number
+): Promise<MirthResponse<any>> {
+  const qs = new URLSearchParams({
+    codigo_producto: String(codigo_producto),
+  });
+  return callMirth(
+    MIRTH_CONFIG.ports.productos,
+    `/cenabast/producto?${qs.toString()}`,
+    { token }
+  );
+}
+
+export async function mirthGetDestinatarios(
+  token: string,
+  solicitante: string
+): Promise<MirthResponse<any>> {
+  const qs = new URLSearchParams({ solicitante });
+  return callMirth(
+    MIRTH_CONFIG.ports.productos,
+    `/cenabast/destinatarios?${qs.toString()}`,
+    { token }
+  );
 }
 
 // ============================================================
@@ -142,9 +176,9 @@ export async function mirthGetProductoById(
 
 export type StockDetalle = {
   codigo_interno: string;
-  codigo_generico: string | number;
+  codigo_generico: number;
   cantidad_stock: number;
-  codigo_despacho?: string | number;
+  codigo_despacho: number;
   codigo_gtin?: string;
   codigo_interno_despacho?: string;
   rut_proveedor?: string;
@@ -237,14 +271,14 @@ export async function mirthGetReglasStock(
 
 export type MovimientoDetalle = {
   codigo_interno: string;
-  codigo_generico: string;
+  codigo_generico: number;
   cantidad: number;
   lote?: string;
   fecha_vencimiento?: string;
   rut_proveedor?: string;
   nro_factura?: string;
   nro_guia_despacho?: string;
-  codigo_despacho?: string | number;
+  codigo_despacho: number;
 };
 
 export type InformarMovimientoPayload = {
@@ -260,17 +294,43 @@ export type InformarMovimientoPayload = {
  */
 export async function mirthInformarMovimiento(
   token: string,
-  payload: InformarMovimientoPayload
-): Promise<MirthResponse> {
-  return callMirth(
-    MIRTH_CONFIG.ports.movimiento,
-    "/cenabast/movimiento/informar",
-    {
-      method: "POST",
-      token,
-      body: payload,
-    }
-  );
+  movimientoData: {
+    id_relacion: number;
+    fecha_movimiento: string;
+    tipo_movimiento: string;
+    tipo_compra: string;
+    movimiento_detalle: MovimientoDetalle[];
+  }
+): Promise<any> {
+  const url = `http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.movimiento}/cenabast/movimiento`;
+
+  const bodyString = JSON.stringify(movimientoData);
+
+  console.log("[MIRTH] URL:", url);
+  console.log("[MIRTH] Body:", bodyString);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: bodyString,
+  });
+
+  const responseText = await response.text();
+  console.log("[MIRTH] Response status:", response.status);
+  console.log("[MIRTH] Response body:", responseText);
+
+  if (!response.ok) {
+    throw new Error(`Error Mirth ${response.status}: ${responseText}`);
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return { message: responseText };
+  }
 }
 
 /**
@@ -305,19 +365,15 @@ export async function checkMirthHealth(): Promise<{
   stock: boolean;
   movimiento: boolean;
 }> {
+  const solicitante =
+    process.env.NEXT_PUBLIC_CENABAST_RUT ||
+    process.env.CENABAST_RUT_SOLICITANTE ||
+    "61980320";
   const checks = await Promise.all([
-    fetch(
-      `http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.auth}/health`
-    ).catch(() => null),
-    fetch(
-      `http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.productos}/health`
-    ).catch(() => null),
-    fetch(
-      `http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.stock}/health`
-    ).catch(() => null),
-    fetch(
-      `http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.movimiento}/health`
-    ).catch(() => null),
+    fetch(`http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.auth}/cenabast/auth`).catch(() => null),
+    fetch(`http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.productos}/cenabast/productos/paginados?paginaActual=1&elementosPorPagina=1`).catch(() => null),
+    fetch(`http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.stock}/cenabast/stock/consulta?solicitante=${solicitante}&mes=12&anio=2025`).catch(() => null),
+    fetch(`http://${MIRTH_CONFIG.host}:${MIRTH_CONFIG.ports.movimiento}/cenabast/movimiento`).catch(() => null),
   ]);
 
   return {

@@ -70,7 +70,7 @@ export function useCatalogo(params: CatalogoFilters) {
       }
       return j as CatalogoResponse;
     },
-    keepPreviousData: true,
+    placeholderData: (previousData) => previousData,
     staleTime: 30_000,
   });
 }

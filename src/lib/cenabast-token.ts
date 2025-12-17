@@ -74,51 +74,34 @@ async function requestTokenFromMirth(): Promise<TokenInfo | null> {
     process.env.CENABAST_PASSWORD ||
     process.env.CENABAST_SERVICE_PASSWORD;
 
-  const endpoints = [
-    {
-      url: `http://${MIRTH_HOST}:${AUTH_PORT}/cenabast/auth/token`,
-      method: "GET" as const,
-      body: undefined as any,
-      source: "mirth-token" as const,
-    },
-    {
-      url: `http://${MIRTH_HOST}:${AUTH_PORT}/cenabast/auth/login`,
-      method: "POST" as const,
-      body: serviceUser && servicePass ? { usuario: serviceUser, clave: servicePass } : {},
-      source: "mirth-login" as const,
-    },
-  ];
+  try {
+    const res = await fetch(`http://${MIRTH_HOST}:${AUTH_PORT}/cenabast/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        serviceUser && servicePass ? { user: serviceUser, password: servicePass } : {}
+      ),
+      signal: AbortSignal.timeout(12000),
+    });
 
-  for (const attempt of endpoints) {
-    try {
-      const res = await fetch(attempt.url, {
-        method: attempt.method,
-        headers: { "Content-Type": "application/json" },
-        body: attempt.method === "POST" ? JSON.stringify(attempt.body) : undefined,
-        signal: AbortSignal.timeout(12000),
-      });
+    if (!res.ok) return null;
+    const data: any = await res.json().catch(() => ({}));
 
-      if (!res.ok) continue;
-      const data: any = await res.json().catch(() => ({}));
+    const token = data?.token || data?.jwt || data?.access_token;
+    const expiresIn = data?.expires_in || data?.expiresIn || 60 * 60; // 1h por defecto
+    if (!token) return null;
 
-      const token = data?.token || data?.jwt || data?.access_token;
-      const expiresIn = data?.expires_in || data?.expiresIn || 60 * 60; // 1h por defecto
-      if (!token) continue;
-
-      const expiresMs = Math.min(expiresIn * 1000, MAX_TOKEN_TTL_MS);
-      const expiresAt = new Date(Date.now() + expiresMs);
-      return { token, expiresAt, source: attempt.source };
-    } catch {
-      // probar siguiente endpoint
-    }
+    const expiresMs = Math.min(expiresIn * 1000, MAX_TOKEN_TTL_MS);
+    const expiresAt = new Date(Date.now() + expiresMs);
+    return { token, expiresAt, source: "mirth-auth" };
+  } catch {
+    return null;
   }
-
-  return null;
 }
 
 async function refreshTokenFromMirth(currentToken: string): Promise<TokenInfo | null> {
   try {
-    const res = await fetch(`http://${MIRTH_HOST}:${AUTH_PORT}/cenabast/auth/refresh`, {
+    const res = await fetch(`http://${MIRTH_HOST}:${AUTH_PORT}/cenabast/auth`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

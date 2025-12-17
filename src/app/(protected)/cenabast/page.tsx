@@ -43,9 +43,7 @@ import {
 } from "@/hooks/use-cenabast";
 
 const DEFAULT_ID_RELACION = Number(
-  process.env.NEXT_PUBLIC_CENABAST_ID_RELACION ||
-    process.env.CENABAST_ID_RELACION ||
-    1
+  process.env.NEXT_PUBLIC_CENABAST_ID_RELACION || 286
 );
 
 function StatusBadge({ status }: { status: string }) {

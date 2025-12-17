@@ -47,14 +47,29 @@ export async function POST(req: Request) {
 
     const { reglas } = parsed.data;
 
-    // Validar que min <= max
+    // Normalizar: eliminar duplicados y descartar reglas inválidas, dejando registro
+    const accepted: typeof reglas = [];
+    const rejected: Array<{ CodigoProducto: string; reason: string }> = [];
+    const seen = new Set<string>();
+
     for (const r of reglas) {
-      if (r.StockMinimo > r.StockMaximo) {
-        return NextResponse.json(
-          { error: { message: `StockMinimo > StockMaximo para producto ${r.CodigoProducto}` } },
-          { status: 400 }
-        );
+      if (r.StockMinimo >= r.StockMaximo) {
+        rejected.push({ CodigoProducto: r.CodigoProducto, reason: "StockMinimo >= StockMaximo" });
+        continue;
       }
+      if (seen.has(r.CodigoProducto)) {
+        rejected.push({ CodigoProducto: r.CodigoProducto, reason: "Duplicado en payload" });
+        continue;
+      }
+      seen.add(r.CodigoProducto);
+      accepted.push(r);
+    }
+
+    if (accepted.length === 0) {
+      return NextResponse.json(
+        { error: { message: "No hay reglas válidas para enviar", rejected } },
+        { status: 400 }
+      );
     }
 
     // Obtener token
@@ -68,7 +83,7 @@ export async function POST(req: Request) {
     const token = tokenInfo.token;
 
     // Enviar a CENABAST vía Mirth
-    const mirthResult = await mirthSetReglasStock(token, reglas);
+    const mirthResult = await mirthSetReglasStock(token, accepted);
 
     if (!mirthResult.success) {
       return NextResponse.json(
@@ -80,7 +95,7 @@ export async function POST(req: Request) {
     // Actualizar tabla local
     const pool = await getPool();
     
-    for (const regla of reglas) {
+    for (const regla of accepted) {
       await pool.request()
         .input("codigo", sql.VarChar(50), regla.CodigoProducto)
         .input("stockMin", sql.Float, regla.StockMinimo)
@@ -98,7 +113,7 @@ export async function POST(req: Request) {
     // Auditoría
     await pool.request()
       .input("accion", sql.VarChar(50), "SET_REGLAS_STOCK")
-      .input("detalle", sql.VarChar(500), `reglas=${reglas.length}`)
+      .input("detalle", sql.VarChar(500), `reglas=${accepted.length}, rejected=${rejected.length}`)
       .query(`
         INSERT INTO dbCenabast.dbo.TBL_auditoria(usuario, accion, detalle)
         VALUES ('system', @accion, @detalle)
@@ -106,7 +121,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      reglas_enviadas: reglas.length,
+      reglas_enviadas: accepted.length,
+      reglas_rechazadas: rejected,
       actualizadas_local: true,
       response: mirthResult.data,
     });
@@ -252,8 +268,34 @@ export async function PUT(req: Request) {
       StockMaximo: Math.round(r.StockMaximo),
     }));
 
+    // Normalizar: eliminar duplicados y descartar reglas inválidas
+    const accepted: typeof reglas = [];
+    const rejected: Array<{ CodigoProducto: string; reason: string }> = [];
+    const seen = new Set<string>();
+
+    for (const r of reglas) {
+      if (r.StockMinimo >= r.StockMaximo) {
+        rejected.push({ CodigoProducto: r.CodigoProducto, reason: "StockMinimo >= StockMaximo" });
+        continue;
+      }
+      if (seen.has(r.CodigoProducto)) {
+        rejected.push({ CodigoProducto: r.CodigoProducto, reason: "Duplicado en payload" });
+        continue;
+      }
+      seen.add(r.CodigoProducto);
+      accepted.push(r);
+    }
+
+    if (accepted.length === 0) {
+      return NextResponse.json({
+        ok: false,
+        message: "No hay reglas válidas para sincronizar",
+        rejected,
+      });
+    }
+
     // Enviar a CENABAST
-    const mirthResult = await mirthSetReglasStock(token, reglas);
+    const mirthResult = await mirthSetReglasStock(token, accepted);
 
     if (!mirthResult.success) {
       return NextResponse.json(
@@ -264,7 +306,8 @@ export async function PUT(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      sincronizadas: reglas.length,
+      sincronizadas: accepted.length,
+      rechazadas: rejected,
       response: mirthResult.data,
     });
   } catch (err: any) {
